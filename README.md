@@ -1,145 +1,150 @@
 # SHERKETI - AI-Governed Equity Crowdfunding Platform
 
-## 🇪🇬 شركتي - منصة التمويل الجماعي المحوكمة بالذكاء الاصطناعي
+> **شركتي** — The world's first constitutionally governed equity crowdfunding platform for Egypt
 
-## Project Overview
-- **Name**: SHERKETI (شركتي)
-- **Goal**: World's first constitutionally governed, AI-enforced equity crowdfunding platform for the Egyptian market
-- **Stack**: Hono + TypeScript + Cloudflare Workers + D1 Database + TailwindCSS + HuggingFace AI
+## Live Demo
+**Platform URL**: [https://3000-ie030y1bdkynon6vaywe9-b9b802c4.sandbox.novita.ai](https://3000-ie030y1bdkynon6vaywe9-b9b802c4.sandbox.novita.ai)
 
-## Live URLs
-- **Platform**: [SHERKETI Platform](https://3000-ie030y1bdkynon6vaywe9-b9b802c4.sandbox.novita.ai)
-- **API Health**: `/api/health`
-- **Constitution**: `/api/constitution/rules`
+## JOZOUR Fee Model (v2.0)
 
-## Demo Accounts
-| Role | Email | Password |
-|------|-------|----------|
-| Admin | admin@sherketi.com | admin123 |
-| Founder | ahmed@techstartup.com | admin123 |
-| Investor (Sara) | sara@gmail.com | admin123 |
-| Investor (Omar) | omar@gmail.com | admin123 |
-| Investor (Fatma) | fatma@gmail.com | admin123 |
+| | Tier A | Tier B | Tier C | Tier D |
+|---|---|---|---|---|
+| **Cash Commission** | 2.5% | 2.5% | 2.5% | 2.5% |
+| **Equity Stake** | 2.5% | 2.5% | 2.5% | 0% |
+| **Board Seat** | 5yr + Veto | 5yr + Veto | 5yr + Veto | None |
+| **Max Raise** | 3M EGP | 25M EGP | Unlimited | Unlimited |
+| **After 5 Years** | Shareholder vote | Shareholder vote | Shareholder vote | N/A |
 
-## Implemented Features
+- If voted out after 5 years: equity retained, board seat + veto removed
+- JOZOUR veto is limited to illegal/unconstitutional actions only
 
-### 8 Immutable Constitutional Rules
-1. **Zero Custody** - Platform never holds funds
-2. **Escrow-Only Flow** - Licensed law-firm escrow accounts
-3. **AI-Locked Governance** - Immutable AI governance rules
-4. **Human-Proof Enforcement** - No override capability
-5. **Immutable Auditability** - Hash-chained append-only ledger
-6. **One Identity Rule** - One government ID = one account
-7. **Transparency Mandate** - Public constitutional rules
-8. **Platform Neutrality** - Equity-only fees (2.5%-5%)
+## Demo Accounts (password: `admin123`)
 
-### Core Modules
-- **Identity & KYC/AML System**: Registration, verification, AI liveness detection, sanctions screening, One Identity Rule enforcement
-- **Project & Tier Engine**: 4-tier system (A/B/C/D), AI feasibility scoring, automated tier assignment
-- **AI Governance Engine**: Feasibility AI, JOZOUR Valuation v3.0, Salary Engine, Risk Prediction, Reputation Scoring
-- **Voting & Board Service**: Share-based voting, 48h windows, quorum tracking, auto-yes for inactive shareholders, proxy voting
-- **Escrow & Ledger Service**: Law-firm escrow workflow, milestone-based releases, dual-signature system, hash-chained audit log
-- **Secondary Market**: Partner-first priority (72h), AI dynamic valuation, liquidity discount, board approval workflow
-- **Tax Automation**: Egyptian capital gains (14%/22.5%), dividend withholding (10%), VAT (14%), Form 41 generation
+| Role | Email | Description |
+|---|---|---|
+| Admin/JOZOUR | admin@sherketi.com | Platform admin with veto power |
+| Founder | ahmed@techstartup.com | Project creator |
+| Investor | sara@gmail.com | Equity investor |
+| Manager | manager@sherketi.com | Operations manager |
+| Accountant | accountant@audit.com | Independent accountant (dual-sig) |
+| Law Firm | lawfirm@elmasry-law.com | Escrow & notarization |
+| Regulator | regulator@fra.gov.eg | FRA shadow mode (read-only) |
 
-### Dashboards
-- **Investor Dashboard**: Portfolio tracking, pending votes, market opportunities, ROI calculations
-- **Founder Dashboard**: Project management, milestone tracking, escrow overview, salary records
-- **Admin Dashboard**: User management, project oversight, emergency freeze, audit log viewer
-- **Law Firm Portal**: Escrow execution, notarization queue, assigned projects
-- **FRA Regulatory Mode**: Read-only aggregated data, no PII exposed
+## Features
 
-### AI Engines (Using Free HuggingFace API)
-1. **Feasibility AI**: Score 0-100, auto-reject <35, 30-day ban
-2. **JOZOUR Valuation v3.0**: 5-component weighted blend (Revenue×Sector 40%, Net Assets 25%, Scorecard 20%, Growth 10%, Founder 5%)
-3. **AI Salary Engine**: Base × Tier × Performance × Region × Profit
-4. **Reputation Scoring**: Investor (6 metrics), Founder (6 metrics), Board (5 metrics)
-5. **Risk Prediction**: 5-category (Governance, Financial, Operational, Compliance, Reputation)
-6. **Tax Calculator**: Capital gains, dividends, VAT with ETA integration
+### Constitutional Rules (8 Immutable)
+1. Zero Custody — Platform never holds funds
+2. Escrow-Only Capital Flow — Licensed law-firm accounts
+3. AI-Locked Governance — No manual overrides
+4. Human-Proof Enforcement — AI validation required
+5. Immutable Auditability — Hash-chained ledger
+6. One Identity Rule — One ID per account forever
+7. Transparency Mandate — Public rules
+8. JOZOUR Dual Compensation — 2.5% commission + 2.5% equity
 
-## API Endpoints
+### AI Engines (6 modules)
+- **Feasibility AI** — Scores projects 0-100 (HuggingFace Zephyr-7B)
+- **JOZOUR Valuation v3.0** — Weighted blend (revenue/assets/scorecard/growth/founder)
+- **Salary Engine** — Base x Tier x Performance x Region x Profit
+- **Reputation Scoring** — Investor/Founder/Board formulas
+- **Risk Prediction** — 5-category assessment
+- **Tax Calculator** — Egyptian ETA integration (Form 41)
 
-### Authentication
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/auth/register` | Register new user |
-| POST | `/api/auth/login` | Login |
-| GET | `/api/auth/me` | Get current user |
-| POST | `/api/auth/kyc/submit` | Submit KYC documents |
-| POST | `/api/auth/kyc/auto-approve` | Auto-approve KYC (demo) |
-
-### Projects
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/projects` | List all projects (filterable) |
-| GET | `/api/projects/:id` | Full project detail with cap table, board, milestones |
-| POST | `/api/projects` | Create new project |
-| POST | `/api/projects/:id/submit-review` | Submit for AI feasibility review |
-| POST | `/api/projects/:id/interest` | Express interest (14-day phase) |
-| POST | `/api/projects/:id/invest` | Invest in live project |
-| POST | `/api/projects/:id/go-live` | Start live fundraising |
+### Dashboards (7 roles)
+- **Investor**: Portfolio, voting, market opportunities, dividends
+- **Founder**: Projects, milestones, escrow overview, board members
+- **Manager**: Operations, pending transactions, salary records
+- **Law Firm**: Escrow execution, notarizations, dispute arbitration
+- **Admin/JOZOUR**: User management, project oversight, JOZOUR terms tracker
+- **FRA Regulator**: Shadow mode (aggregated data, no PII)
+- **Public**: Constitution viewer, project explorer
 
 ### Governance
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/governance/votes/:projectId` | Get votes for project |
-| POST | `/api/governance/votes` | Create new vote/proposal |
-| POST | `/api/governance/votes/:id/cast` | Cast vote (for/against/abstain) |
-| GET | `/api/governance/events/:projectId` | Governance event timeline |
-| GET | `/api/governance/board/:projectId` | Board members |
-| POST | `/api/governance/milestone-release` | Request milestone fund release |
-| POST | `/api/governance/escrow/:id/sign` | Dual-signature approval |
-| POST | `/api/governance/disputes` | File a dispute |
-| GET | `/api/governance/notifications` | User notifications |
+- 1 share = 1 vote
+- 51% quorum, >50% majority, 75% for constitutional amendments
+- 48-hour voting windows with auto-yes for inactive shareholders
+- Dual signature for transactions >1% capital
+- Full board vote for transactions >10% capital
+- JOZOUR veto on illegal/unconstitutional actions
 
-### Secondary Market
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/market/orders` | List market orders |
-| POST | `/api/market/sell` | Create sell order (72h priority window) |
-| POST | `/api/market/buy/:orderId` | Buy shares |
-| GET | `/api/market/stats/:projectId` | Market statistics |
+### End-to-End Workflow
+1. **Register** → KYC verification (AI liveness + OCR)
+2. **Create Project** → AI feasibility review (score < 35 = auto-reject)
+3. **Interest Phase** → 14 days, need 30% pledges or 500 votes
+4. **Live Fundraising** → Min investment 50 EGP, 48h share reservation
+5. **Funded** → JOZOUR commission deducted, equity + board seat created
+6. **Milestones** → Tranche releases via escrow with dual-sig/board approval
+7. **Governance** → Quarterly reports, voting, dividend distribution
+8. **Secondary Market** → 72h partner-first, AI dynamic valuation
 
-### AI Engine
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/ai/feasibility` | AI feasibility analysis |
-| POST | `/api/ai/valuation` | JOZOUR Valuation v3.0 |
-| POST | `/api/ai/salary` | AI salary calculation |
-| POST | `/api/ai/reputation` | Reputation score calculator |
-| POST | `/api/ai/risk-assessment` | Risk prediction system |
-| POST | `/api/ai/tax-calculate` | Egyptian tax calculator |
+## Tech Stack (100% Free)
+- **Backend**: Hono + TypeScript on Cloudflare Workers
+- **Database**: Cloudflare D1 (SQLite) — 16 tables
+- **AI**: HuggingFace Inference API (free tier)
+- **Frontend**: Vanilla JS SPA + TailwindCSS CDN
+- **Fonts**: Inter + Cairo (Arabic support)
+- **Icons**: FontAwesome 6
 
-### Dashboard & Admin
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/dashboard/investor` | Investor dashboard data |
-| GET | `/api/dashboard/founder` | Founder dashboard data |
-| GET | `/api/dashboard/law-firm` | Law firm portal data |
-| GET | `/api/dashboard/regulator` | FRA shadow mode (read-only) |
-| GET | `/api/dashboard/platform-stats` | Public platform statistics |
-| GET | `/api/admin/overview` | Admin overview |
-| GET | `/api/admin/users` | Manage users |
-| POST | `/api/admin/users/:id/kyc` | Approve/reject KYC |
-| GET | `/api/admin/projects` | All projects |
-| POST | `/api/admin/projects/:id/freeze` | Emergency freeze |
-| GET | `/api/admin/audit-log` | Immutable audit log |
+## API Endpoints (40+)
+
+### Auth
+- `POST /api/auth/register` — Register new user
+- `POST /api/auth/login` — Login
+- `GET /api/auth/me` — Current user profile
+- `POST /api/auth/kyc/submit` — Submit KYC docs
+- `POST /api/auth/kyc/auto-approve` — Demo auto-verify
+
+### Projects
+- `GET /api/projects` — List projects (filter by status/tier/sector)
+- `GET /api/projects/:id` — Full project details
+- `POST /api/projects` — Create project proposal
+- `POST /api/projects/:id/submit-review` — AI feasibility review
+- `POST /api/projects/:id/interest` — Express interest
+- `POST /api/projects/:id/invest` — Invest in live project
+- `POST /api/projects/:id/go-live` — Start live fundraising
+
+### Governance
+- `GET /api/governance/votes/:projectId` — Get votes
+- `POST /api/governance/votes` — Create proposal
+- `POST /api/governance/votes/:id/cast` — Cast vote
+- `POST /api/governance/votes/:id/veto` — JOZOUR veto
+- `POST /api/governance/check-jozour-terms` — Check expiring terms
+- `POST /api/governance/milestone-release` — Request fund release
+- `POST /api/governance/escrow/:id/sign` — Dual signature
+- `POST /api/governance/disputes` — File dispute
+
+### AI
+- `POST /api/ai/feasibility` — AI project scoring
+- `POST /api/ai/valuation` — JOZOUR Valuation v3.0
+- `POST /api/ai/salary` — Salary calculation
+- `POST /api/ai/reputation` — Reputation scoring
+- `POST /api/ai/risk-assessment` — Risk prediction
+- `POST /api/ai/tax-calculate` — Tax calculation
 
 ### Constitution
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/constitution/rules` | Public constitutional rules |
-| GET | `/api/constitution/audit-chain` | Verify audit chain integrity |
+- `GET /api/constitution/rules` — Full constitution
+- `GET /api/constitution/audit-chain` — Verify audit chain
+- `GET /api/constitution/jozour-terms` — JOZOUR board terms
 
-## Data Architecture
-- **Database**: Cloudflare D1 (SQLite) with 15 tables
-- **Core Tables**: users, projects, shareholdings, board_members, governance_events, votes, vote_records, escrow_transactions, milestones, market_orders, disputes, notifications, audit_log, risk_alerts, salary_records, tax_records
-- **Immutable Ledger**: Hash-chained append-only audit log (no UPDATE/DELETE)
-- **Storage**: Zero-custody design — no fund storage capability exists in the platform
+## Setup
 
-## Deployment
-- **Platform**: Cloudflare Pages/Workers
-- **Database**: Cloudflare D1 (local SQLite for dev)
-- **AI**: HuggingFace Inference API (free tier)
-- **Status**: ✅ Active
+```bash
+npm install
+npm run db:migrate:local
+npm run db:seed
+npm run build
+npm run preview
+```
+
+Add your HuggingFace API key to `.dev.vars`:
+```
+HF_API_KEY=your_key_here
+```
+
+## GitHub
+- **Repository**: https://github.com/fortleem/SHERKETI
+
+## Status
+- **Platform**: Cloudflare Workers (D1 local)
+- **Version**: 2.0.0
 - **Last Updated**: 2026-04-12
