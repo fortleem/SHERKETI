@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sherketi",
+  "compatibility_date": "2026-04-12",
+  "pages_build_output_dir": "./dist",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "sherketi-production",
+      "database_id": "local-dev-id"
+    }
+  ],
+  "vars": {
+    "PLATFORM_NAME": "SHERKETI",
+    "PLATFORM_VERSION": "2.0.0"
+  }
+}
