@@ -78,7 +78,7 @@ governanceRoutes.post('/votes', async (c) => {
   return c.json({ success: true, voteId, voting_deadline: votingDeadline, message: '48-hour voting window opened. All shareholders notified.' })
 })
 
-// Cast a vote — includes JOZOUR veto check
+// Cast a vote — includes SHERKETI veto check
 governanceRoutes.post('/votes/:voteId/cast', async (c) => {
   const authHeader = c.req.header('Authorization')
   if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
@@ -131,16 +131,16 @@ governanceRoutes.post('/votes/:voteId/cast', async (c) => {
     const effectiveVotes = updatedVote.votes_for + updatedVote.votes_against
     const forPercentage = effectiveVotes > 0 ? (updatedVote.votes_for / effectiveVotes) * 100 : 0
     if (forPercentage >= updatedVote.required_majority) {
-      // Check for JOZOUR veto (Tiers A/B/C only)
+      // Check for SHERKETI veto (ALL tiers per Blueprint v3.1)
       const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(vote.project_id).first<any>()
-      if (project && project.jozour_veto_active && ['A','B','C'].includes(project.tier)) {
-        // JOZOUR can only veto illegal/unconstitutional actions
+      if (project && project.jozour_veto_active) {
+        // SHERKETI can only veto illegal/unconstitutional actions
         // Simulate AI check for illegal action
         const isIllegalAction = false // In production: AI analysis
         if (isIllegalAction) {
-          await c.env.DB.prepare("UPDATE votes SET status = 'vetoed', vetoed_by = 'JOZOUR', veto_reason = 'Constitutional violation detected' WHERE id = ?").bind(voteId).run()
+          await c.env.DB.prepare("UPDATE votes SET status = 'vetoed', vetoed_by = 'SHERKETI', veto_reason = 'Constitutional violation detected' WHERE id = ?").bind(voteId).run()
           vetoed = true
-          await logAudit(c.env.DB, 'vote_vetoed_jozour', 'vote', voteId, null, 'JOZOUR veto: constitutional violation', 'governance-ai-v1')
+          await logAudit(c.env.DB, 'vote_vetoed_jozour', 'vote', voteId, null, 'SHERKETI veto: constitutional violation', 'governance-ai-v1')
         }
       }
       
@@ -148,7 +148,7 @@ governanceRoutes.post('/votes/:voteId/cast', async (c) => {
         await c.env.DB.prepare("UPDATE votes SET status = 'passed' WHERE id = ?").bind(voteId).run()
         resolved = true
 
-        // Handle JOZOUR retention vote result
+        // Handle SHERKETI retention vote result
         if (vote.vote_type === 'jozour_retention_vote') {
           await handleJozourRetentionResult(c.env.DB, vote.project_id, true)
         }
@@ -159,20 +159,20 @@ governanceRoutes.post('/votes/:voteId/cast', async (c) => {
       await c.env.DB.prepare("UPDATE votes SET status = 'failed' WHERE id = ?").bind(voteId).run()
       resolved = true
 
-      // Handle JOZOUR retention vote failure
+      // Handle SHERKETI retention vote failure
       if (vote.vote_type === 'jozour_retention_vote') {
         await handleJozourRetentionResult(c.env.DB, vote.project_id, false)
       }
     }
   }
 
-  return c.json({ success: true, voting_power: votingPower, quorum_met: quorumMet, resolved, vetoed, message: vetoed ? 'Vote vetoed by JOZOUR (constitutional violation).' : 'Vote recorded.' })
+  return c.json({ success: true, voting_power: votingPower, quorum_met: quorumMet, resolved, vetoed, message: vetoed ? 'Vote vetoed by SHERKETI (constitutional violation).' : 'Vote recorded.' })
 })
 
-// Handle JOZOUR 5-year retention vote result
+// Handle SHERKETI 5-year retention vote result
 async function handleJozourRetentionResult(db: D1Database, projectId: number, retained: boolean) {
   if (retained) {
-    // Extend JOZOUR board term by 5 more years
+    // Extend SHERKETI board term by 5 more years
     const newTermEnd = new Date(Date.now() + 5 * 365.25 * 24 * 60 * 60 * 1000).toISOString()
     await db.prepare(`
       UPDATE board_members SET term_end = ?, status = 'active' WHERE project_id = ? AND role = 'jozour_observer'
@@ -182,31 +182,30 @@ async function handleJozourRetentionResult(db: D1Database, projectId: number, re
     `).bind(newTermEnd, projectId).run()
     await logAudit(db, 'jozour_retained', 'board', projectId, null, JSON.stringify({ new_term_end: newTermEnd, action: 'retained by shareholder vote' }))
   } else {
-    // Remove JOZOUR board seat and veto, but KEEP equity
+    // Remove SHERKETI board seat and veto, but KEEP equity
     await db.prepare(`
       UPDATE board_members SET status = 'term_expired', removed_at = CURRENT_TIMESTAMP WHERE project_id = ? AND role = 'jozour_observer'
     `).bind(projectId).run()
     await db.prepare(`
       UPDATE projects SET jozour_veto_active = 0 WHERE id = ?
     `).bind(projectId).run()
-    await logAudit(db, 'jozour_removed', 'board', projectId, null, 'JOZOUR voted out after 5-year term. Equity retained, board seat and veto power removed.')
+    await logAudit(db, 'jozour_removed', 'board', projectId, null, 'SHERKETI voted out after 5-year term. Equity retained, board seat and veto power removed.')
   }
 }
 
-// Check JOZOUR term expiry and trigger votes
+// Check SHERKETI term expiry and trigger votes
 governanceRoutes.post('/check-jozour-terms', async (c) => {
   const authHeader = c.req.header('Authorization')
   if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
   const payload = verifyToken(authHeader.replace('Bearer ', ''))
   if (!payload) return c.json({ error: 'Invalid token' }, 401)
 
-  // Find projects where JOZOUR term is expiring
+  // Find projects where SHERKETI term is expiring (Blueprint: auto-ballot 90 days before term end)
   const expiringProjects = await c.env.DB.prepare(`
     SELECT p.id, p.title, p.jozour_board_term_end, p.tier
     FROM projects p 
     WHERE p.jozour_veto_active = 1 
-    AND p.tier IN ('A', 'B', 'C')
-    AND p.jozour_board_term_end <= datetime('now', '+30 days')
+    AND p.jozour_board_term_end <= datetime('now', '+90 days')
     AND p.status NOT IN ('draft', 'rejected', 'dissolved')
     AND p.id NOT IN (SELECT project_id FROM votes WHERE vote_type = 'jozour_retention_vote' AND status = 'open')
   `).all()
@@ -226,8 +225,8 @@ governanceRoutes.post('/check-jozour-terms', async (c) => {
       VALUES (?, ?, ?, ?, 'jozour_retention_vote', 'open', 50.0, 51.0, ?, ?)
     `).bind(
       project.id, Date.now(),
-      `JOZOUR Board Seat Renewal — ${project.title}`,
-      `JOZOUR's 5-year board term is expiring. Vote to determine if JOZOUR retains its board seat and veto power. JOZOUR's 2.5% equity stake is NOT affected by this vote.`,
+      `SHERKETI Board Seat Renewal — ${project.title}`,
+      `SHERKETI's 5-year board term is expiring. Vote to determine if SHERKETI retains its board seat and veto power. Simple majority (>50%) decides. SHERKETI's 2.5% equity stake is NOT affected by this vote. If no vote is held, term extends by 1 year then auto-renews.`,
       shareholders?.total || 0, votingDeadline
     ).run()
 
@@ -243,15 +242,15 @@ governanceRoutes.post('/check-jozour-terms', async (c) => {
   return c.json({ success: true, triggered: triggeredVotes.length, vote_ids: triggeredVotes })
 })
 
-// JOZOUR Veto action (admin/jozour only)
+// SHERKETI Veto action (admin/jozour only)
 governanceRoutes.post('/votes/:voteId/veto', async (c) => {
   const authHeader = c.req.header('Authorization')
   if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
   const payload = verifyToken(authHeader.replace('Bearer ', ''))
   if (!payload) return c.json({ error: 'Invalid token' }, 401)
 
-  // Only admin (JOZOUR) can veto
-  if (payload.role !== 'admin') return c.json({ error: 'Only JOZOUR representative can exercise veto' }, 403)
+  // Only admin (SHERKETI) can veto
+  if (payload.role !== 'admin') return c.json({ error: 'Only SHERKETI representative can exercise veto' }, 403)
 
   const voteId = parseInt(c.req.param('voteId'))
   const { reason } = await c.req.json()
@@ -259,14 +258,14 @@ governanceRoutes.post('/votes/:voteId/veto', async (c) => {
   const vote = await c.env.DB.prepare("SELECT * FROM votes WHERE id = ? AND status = 'open'").bind(voteId).first<any>()
   if (!vote) return c.json({ error: 'Vote not found or already closed' }, 404)
 
-  // Verify project has active JOZOUR veto
+  // Verify project has active SHERKETI veto
   const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(vote.project_id).first<any>()
   if (!project || !project.jozour_veto_active) {
-    return c.json({ error: 'JOZOUR veto not active for this project' }, 403)
+    return c.json({ error: 'SHERKETI veto not active for this project' }, 403)
   }
 
   await c.env.DB.prepare(`
-    UPDATE votes SET status = 'vetoed', vetoed_by = 'JOZOUR', veto_reason = ? WHERE id = ?
+    UPDATE votes SET status = 'vetoed', vetoed_by = 'SHERKETI', veto_reason = ? WHERE id = ?
   `).bind(reason || 'Constitutional violation', voteId).run()
 
   await c.env.DB.prepare(`
@@ -276,7 +275,7 @@ governanceRoutes.post('/votes/:voteId/veto', async (c) => {
 
   await logAudit(c.env.DB, 'jozour_veto_exercised', 'vote', voteId, payload.uid, JSON.stringify({ reason }))
 
-  return c.json({ success: true, message: 'JOZOUR veto exercised. Vote cancelled due to constitutional violation.' })
+  return c.json({ success: true, message: 'SHERKETI veto exercised. Vote cancelled due to constitutional violation.' })
 })
 
 // Get governance events for a project

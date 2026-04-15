@@ -37,7 +37,7 @@ app.route('/api/admin', adminRoutes)
 app.route('/api/constitution', constitutionRoutes)
 
 // Health check
-app.get('/api/health', (c) => c.json({ status: 'ok', platform: 'SHERKETI', version: '2.0.0', jozour_model: '2.5% commission + 2.5% equity + 5yr board (A/B/C)' }))
+app.get('/api/health', (c) => c.json({ status: 'ok', platform: 'SHERKETI', version: '3.1.0', blueprint: 'v3.1 — 10 Constitutional Rules', fee_model: '2.5% cash + 2.5% equity ALL tiers + 5yr board seat' }))
 
 // Main SPA - serves the frontend
 app.get('*', (c) => {

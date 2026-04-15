@@ -1,6 +1,7 @@
--- SHERKETI Platform Complete Database Schema v2.0
+-- SHERKETI Platform Complete Database Schema v3.1
 -- Constitutional AI-Governed Equity Crowdfunding Platform
--- Updated: JOZOUR takes 2.5% cash commission + 2.5% equity + 5yr board seat with veto (Tier A/B/C)
+-- Blueprint v3.1 Alignment: 2.5% cash + 2.5% equity ALL TIERS (A/B/C/D)
+-- 5yr board seat with veto (Tiers A/B/C) + 10 Constitutional Rules
 
 -- Users Table (KYC/Identity)
 CREATE TABLE IF NOT EXISTS users (
@@ -29,13 +30,13 @@ CREATE TABLE IF NOT EXISTS users (
   reputation_details TEXT,
   ban_until DATETIME,
   ban_reason TEXT,
-  region TEXT DEFAULT 'cairo' CHECK(region IN ('cairo','alexandria','delta','upper_egypt','other')),
+  region TEXT DEFAULT 'cairo' CHECK(region IN ('cairo','alexandria','delta','upper_egypt','suez_canal','other')),
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   last_login DATETIME
 );
 
--- Projects Table
+-- Projects Table (Blueprint v3.1)
 CREATE TABLE IF NOT EXISTS projects (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   founder_id INTEGER NOT NULL,
@@ -44,7 +45,7 @@ CREATE TABLE IF NOT EXISTS projects (
   description TEXT NOT NULL,
   sector TEXT NOT NULL,
   tier TEXT NOT NULL CHECK(tier IN ('A','B','C','D')),
-  status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','ai_review','interest_phase','live_fundraising','funded','active','frozen','dissolved','rejected')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','ai_review','interest_phase','live_fundraising','funded','active','operational','frozen','dissolved','rejected')),
   law_firm_id INTEGER,
   funding_goal REAL NOT NULL,
   funding_raised REAL DEFAULT 0,
@@ -56,26 +57,65 @@ CREATE TABLE IF NOT EXISTS projects (
   ai_feasibility_details TEXT,
   ai_valuation_details TEXT,
   governance_state TEXT DEFAULT 'pre_funding',
+  -- JOZOUR/SHERKETI Fee Model: 2.5% cash + 2.5% equity ALL tiers (Blueprint v3.1 Rule 8)
   jozour_equity_percent REAL DEFAULT 2.5,
   jozour_commission_percent REAL DEFAULT 2.5,
   jozour_veto_active INTEGER DEFAULT 1,
   jozour_board_term_start DATETIME,
   jozour_board_term_end DATETIME,
   jozour_term_renewed INTEGER DEFAULT 0,
+  -- Founder Tier Rules
+  founder_equity_percent REAL DEFAULT 5.0,
+  founder_dividend_bonus REAL DEFAULT 0,
+  founder_is_manager INTEGER DEFAULT 0,
+  founder_manager_banned INTEGER DEFAULT 0,
+  -- Founder Partner Limitation (Add-on 16)
+  investor_cap INTEGER,
+  investor_cap_type TEXT DEFAULT 'unlimited' CHECK(investor_cap_type IN ('unlimited','limited')),
+  ai_min_investment REAL,
+  -- Interest Phase
   interest_votes INTEGER DEFAULT 0,
   soft_pledges REAL DEFAULT 0,
   interest_phase_start DATETIME,
   interest_phase_end DATETIME,
+  -- Fundraising
   funding_start DATETIME,
   funding_end DATETIME,
+  overfunding_cap REAL,
+  -- Pitch Materials (Add-on 17)
+  pitch_deck_hash TEXT,
+  pitch_video_hash TEXT,
+  pitch_bonus_score REAL DEFAULT 0,
+  -- AI & Docs
   business_plan_hash TEXT,
   financial_docs_hash TEXT,
   milestones TEXT,
+  -- Health & Risk
   health_score REAL DEFAULT 50.0,
   risk_level TEXT DEFAULT 'standard',
+  -- Fundamental Share Price (Add-on 1 / Rule 9)
+  fundamental_share_price REAL,
+  fundamental_price_updated DATETIME,
+  eps REAL,
+  nav_per_share REAL,
+  sector_pe REAL,
+  growth_multiplier REAL,
+  total_shares INTEGER DEFAULT 10000,
+  -- Financial Data
   quarterly_reports TEXT,
+  annual_revenue REAL,
+  net_profit REAL,
+  total_assets REAL,
+  total_liabilities REAL,
+  -- Escrow & Region
   escrow_account_id TEXT,
   company_region TEXT DEFAULT 'cairo',
+  -- Insurance Vault (Add-on 8)
+  insurance_vault_contribution REAL DEFAULT 0,
+  -- Dynamic Profit Share (Add-on 7)
+  profit_forecast REAL,
+  profit_actual REAL,
+  dynamic_profit_adjustment REAL DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (founder_id) REFERENCES users(id),
@@ -94,9 +134,10 @@ CREATE TABLE IF NOT EXISTS shareholdings (
   vesting_schedule TEXT,
   vested_percentage REAL DEFAULT 100.0,
   dividend_rights INTEGER DEFAULT 1,
+  dividend_bonus REAL DEFAULT 0,
   voting_power REAL,
   status TEXT DEFAULT 'active' CHECK(status IN ('active','reserved','vesting','frozen','sold','transferred')),
-  acquired_via TEXT DEFAULT 'primary' CHECK(acquired_via IN ('primary','secondary','vesting','platform_fee','commission')),
+  acquired_via TEXT DEFAULT 'primary' CHECK(acquired_via IN ('primary','secondary','vesting','platform_fee','commission','founder_allocation')),
   reserved_until DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -104,7 +145,7 @@ CREATE TABLE IF NOT EXISTS shareholdings (
   FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
--- Board Members Table (with term tracking for JOZOUR 5yr seat)
+-- Board Members Table
 CREATE TABLE IF NOT EXISTS board_members (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL,
@@ -112,6 +153,7 @@ CREATE TABLE IF NOT EXISTS board_members (
   role TEXT NOT NULL CHECK(role IN ('founder_rep','manager','independent_accountant','shareholder_rep','jozour_observer')),
   status TEXT DEFAULT 'active' CHECK(status IN ('active','removed','resigned','term_expired','pending_renewal_vote')),
   has_veto INTEGER DEFAULT 0,
+  veto_categories TEXT,
   term_start DATETIME DEFAULT CURRENT_TIMESTAMP,
   term_end DATETIME,
   term_years INTEGER DEFAULT 0,
@@ -123,7 +165,7 @@ CREATE TABLE IF NOT EXISTS board_members (
   FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
--- Governance Events Table (Append-only Immutable Ledger)
+-- Governance Events (Append-only Immutable Ledger)
 CREATE TABLE IF NOT EXISTS governance_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL,
@@ -139,14 +181,14 @@ CREATE TABLE IF NOT EXISTS governance_events (
   FOREIGN KEY (actor_id) REFERENCES users(id)
 );
 
--- Votes Table (added jozour_retention_vote type)
+-- Votes Table
 CREATE TABLE IF NOT EXISTS votes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL,
   proposal_id INTEGER NOT NULL,
   title TEXT NOT NULL,
   description TEXT,
-  vote_type TEXT NOT NULL CHECK(vote_type IN ('board_resolution','shareholder_vote','milestone_release','manager_removal','constitutional_amendment','emergency_recall','expense_approval','jozour_retention_vote')),
+  vote_type TEXT NOT NULL CHECK(vote_type IN ('board_resolution','shareholder_vote','milestone_release','manager_removal','constitutional_amendment','emergency_recall','expense_approval','jozour_retention_vote','manager_election','dividend_declaration')),
   status TEXT DEFAULT 'open' CHECK(status IN ('open','passed','failed','expired','vetoed')),
   required_majority REAL DEFAULT 50.0,
   quorum_required REAL DEFAULT 51.0,
@@ -161,6 +203,7 @@ CREATE TABLE IF NOT EXISTS votes (
   result_notarized INTEGER DEFAULT 0,
   vetoed_by TEXT,
   veto_reason TEXT,
+  veto_category TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (project_id) REFERENCES projects(id)
 );
@@ -178,11 +221,11 @@ CREATE TABLE IF NOT EXISTS vote_records (
   FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
--- Escrow Transactions (added commission type)
+-- Escrow Transactions
 CREATE TABLE IF NOT EXISTS escrow_transactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL,
-  transaction_type TEXT NOT NULL CHECK(transaction_type IN ('deposit','release','freeze','recall','dividend','fee','commission')),
+  transaction_type TEXT NOT NULL CHECK(transaction_type IN ('deposit','release','freeze','recall','dividend','fee','commission','insurance_vault')),
   amount REAL NOT NULL,
   from_entity TEXT,
   to_entity TEXT,
@@ -217,7 +260,7 @@ CREATE TABLE IF NOT EXISTS milestones (
   FOREIGN KEY (project_id) REFERENCES projects(id)
 );
 
--- Secondary Market Orders
+-- Secondary Market Orders (Fundamental Pricing)
 CREATE TABLE IF NOT EXISTS market_orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL,
@@ -228,8 +271,12 @@ CREATE TABLE IF NOT EXISTS market_orders (
   ask_price REAL NOT NULL,
   bid_price REAL,
   ai_valuation REAL,
-  status TEXT DEFAULT 'listed' CHECK(status IN ('listed','priority_window','matched','pending_board','completed','cancelled','expired')),
+  fundamental_price REAL,
+  price_band_low REAL,
+  price_band_high REAL,
+  status TEXT DEFAULT 'listed' CHECK(status IN ('listed','priority_window','founder_priority','matched','pending_board','completed','cancelled','expired')),
   priority_window_end DATETIME,
+  founder_priority_end DATETIME,
   board_approval_id INTEGER,
   law_firm_stamp TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -329,7 +376,7 @@ CREATE TABLE IF NOT EXISTS tax_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL,
   user_id INTEGER NOT NULL,
-  tax_type TEXT NOT NULL CHECK(tax_type IN ('capital_gains','dividend_withholding','vat')),
+  tax_type TEXT NOT NULL CHECK(tax_type IN ('capital_gains','dividend_withholding','vat','stamp_duty')),
   gross_amount REAL NOT NULL,
   tax_rate REAL NOT NULL,
   tax_amount REAL NOT NULL,
@@ -339,6 +386,52 @@ CREATE TABLE IF NOT EXISTS tax_records (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (project_id) REFERENCES projects(id),
   FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- Employee Registry (Add-on 3)
+CREATE TABLE IF NOT EXISTS employee_registry (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL,
+  full_name TEXT NOT NULL,
+  position_title TEXT NOT NULL,
+  role_description TEXT,
+  department TEXT,
+  hire_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+  reporting_to TEXT,
+  employment_type TEXT DEFAULT 'full_time' CHECK(employment_type IN ('full_time','part_time','contract','internship')),
+  compensation_band TEXT,
+  status TEXT DEFAULT 'active' CHECK(status IN ('active','on_leave','terminated')),
+  is_key_person INTEGER DEFAULT 0,
+  succession_plan_status TEXT DEFAULT 'none' CHECK(succession_plan_status IN ('none','in_progress','ready')),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+
+-- Insurance Vault (Add-on 8)
+CREATE TABLE IF NOT EXISTS insurance_vault (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL,
+  contribution_amount REAL NOT NULL,
+  contribution_type TEXT DEFAULT 'fundraising' CHECK(contribution_type IN ('fundraising','quarterly','manual')),
+  vault_balance REAL DEFAULT 0,
+  status TEXT DEFAULT 'active',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+
+-- Skill Barter Exchange (Add-on 14)
+CREATE TABLE IF NOT EXISTS skill_barter (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider_id INTEGER NOT NULL,
+  project_id INTEGER,
+  service_description TEXT NOT NULL,
+  hours_offered REAL NOT NULL,
+  hourly_rate REAL NOT NULL,
+  total_credits REAL NOT NULL,
+  status TEXT DEFAULT 'available' CHECK(status IN ('available','matched','in_progress','completed','disputed','expired')),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  expires_at DATETIME,
+  FOREIGN KEY (provider_id) REFERENCES users(id)
 );
 
 -- Indexes
@@ -360,3 +453,6 @@ CREATE INDEX IF NOT EXISTS idx_milestones_project ON milestones(project_id);
 CREATE INDEX IF NOT EXISTS idx_risk_alerts_project ON risk_alerts(project_id);
 CREATE INDEX IF NOT EXISTS idx_board_members_project ON board_members(project_id);
 CREATE INDEX IF NOT EXISTS idx_board_members_user ON board_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_employee_registry_project ON employee_registry(project_id);
+CREATE INDEX IF NOT EXISTS idx_insurance_vault_project ON insurance_vault(project_id);
+CREATE INDEX IF NOT EXISTS idx_skill_barter_provider ON skill_barter(provider_id);

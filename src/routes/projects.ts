@@ -127,19 +127,38 @@ projectRoutes.post('/', async (c) => {
     return c.json({ error: `Funding goal exceeds Tier ${selectedTier} limit of ${tierLimits[selectedTier]} EGP` }, 400)
   }
 
-  // NEW JOZOUR Fee Model: 2.5% cash commission + 2.5% equity (Tiers A/B/C), 2.5% commission only for Tier D
-  const jozourCommission = 2.5  // Always 2.5% cash commission
-  const jozourEquity = selectedTier === 'D' ? 0 : 2.5  // 2.5% equity for A/B/C, 0% for D
-  const jozourVeto = selectedTier === 'D' ? 0 : 1  // Veto for A/B/C only
+  // Blueprint v3.1 Fee Model: 2.5% cash + 2.5% equity for ALL tiers (A/B/C/D)
+  const jozourCommission = 2.5  // Always 2.5% cash commission — ALL tiers
+  const jozourEquity = 2.5  // Always 2.5% equity — ALL tiers (Blueprint Rule 8)
+  const jozourVeto = 1  // 5yr board seat with veto for ALL tiers
+
+  // Tier-specific founder rules (Blueprint Part IV)
+  const founderRules: Record<string, {equity: number, dividend_bonus: number, is_manager: number, manager_banned: number}> = {
+    'A': { equity: 5.0, dividend_bonus: 5.0, is_manager: 0, manager_banned: 1 },
+    'B': { equity: 5.0, dividend_bonus: 0, is_manager: 0, manager_banned: 0 },
+    'C': { equity: 10.0, dividend_bonus: 35.0, is_manager: 1, manager_banned: 0 },
+    'D': { equity: 0, dividend_bonus: 0, is_manager: 1, manager_banned: 0 }
+  }
+  const founderRule = founderRules[selectedTier] || founderRules['A']
+
+  // Founder Partner Limitation (Add-on 16)
+  const investorCap = body.investor_cap || null
+  const investorCapType = investorCap ? 'limited' : 'unlimited'
+  const aiMinInvestment = investorCap ? Math.ceil(funding_goal / (investorCap * 0.7)) : null
 
   const result = await c.env.DB.prepare(`
     INSERT INTO projects (founder_id, title, title_ar, description, sector, tier, status, funding_goal, 
       min_investment, equity_offered, jozour_commission_percent, jozour_equity_percent, jozour_veto_active,
+      founder_equity_percent, founder_dividend_bonus, founder_is_manager, founder_manager_banned,
+      investor_cap, investor_cap_type, ai_min_investment,
       milestones, company_region, governance_state)
-    VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, 'pre_funding')
+    VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pre_funding')
   `).bind(
     payload.uid, title, title_ar || null, description, sector, selectedTier,
-    funding_goal, min_investment || 50, equity_offered, jozourCommission, jozourEquity, jozourVeto,
+    funding_goal, aiMinInvestment || min_investment || 50, equity_offered, 
+    jozourCommission, jozourEquity, jozourVeto,
+    founderRule.equity, founderRule.dividend_bonus, founderRule.is_manager, founderRule.manager_banned,
+    investorCap, investorCapType, aiMinInvestment,
     milestones ? JSON.stringify(milestones) : null, company_region || 'cairo'
   ).run()
 
@@ -164,9 +183,15 @@ projectRoutes.post('/', async (c) => {
     jozour_fee: {
       commission: `${jozourCommission}%`,
       equity: `${jozourEquity}%`,
-      board_seat: jozourVeto ? '5yr with veto' : 'None',
+      board_seat: '5yr with veto (6 categories)',
       tier: selectedTier
     },
+    founder_rules: {
+      equity: `${founderRule.equity}%`,
+      dividend_bonus: founderRule.dividend_bonus > 0 ? `${founderRule.dividend_bonus}% bonus` : 'Standard pro-rata',
+      manager: founderRule.manager_banned ? 'Banned (independent manager required)' : founderRule.is_manager ? 'Default manager' : 'Can be elected'
+    },
+    investor_limit: investorCapType === 'limited' ? { cap: investorCap, ai_min_investment: aiMinInvestment } : 'Unlimited',
     message: 'Project created. Submit for AI feasibility review.' 
   })
 })
@@ -230,7 +255,7 @@ projectRoutes.post('/:id/submit-review', async (c) => {
 
     const valuation = calculateValuation(project, feasibilityResult.score)
 
-    // Calculate 5-year board term dates for JOZOUR
+    // Calculate 5-year board term dates for SHERKETI
     const boardTermStart = new Date().toISOString()
     const boardTermEnd = new Date(Date.now() + 5 * 365.25 * 24 * 60 * 60 * 1000).toISOString()
 
@@ -328,41 +353,49 @@ projectRoutes.post('/:id/invest', async (c) => {
 
   await logAudit(c.env.DB, 'investment_made', 'shareholding', id, payload.uid, JSON.stringify({ amount, equity: equityPercent, shares: sharesCount }))
 
-  // Check if fully funded - if so, setup JOZOUR equity and board seat
+  // Check if fully funded - if so, setup SHERKETI equity and board seat
   const updatedProject = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(id).first<any>()
   if (updatedProject && updatedProject.funding_raised >= updatedProject.funding_goal) {
     await c.env.DB.prepare("UPDATE projects SET status = 'funded', governance_state = 'active' WHERE id = ?").bind(id).run()
     
-    // Auto-create JOZOUR equity shareholding for Tiers A/B/C
-    if (['A', 'B', 'C'].includes(updatedProject.tier)) {
-      const jozourEquityPct = updatedProject.jozour_equity_percent || 2.5
-      await c.env.DB.prepare(`
-        INSERT OR IGNORE INTO shareholdings (project_id, user_id, equity_percentage, shares_count, share_price, investment_amount, status, acquired_via)
-        VALUES (?, 1, ?, ?, 0, 0, 'active', 'platform_fee')
-      `).bind(id, jozourEquityPct, Math.floor(jozourEquityPct * 100)).run()
-    }
+    // Auto-create SHERKETI equity shareholding — ALL TIERS get 2.5% (Blueprint Rule 8)
+    const jozourEquityPct = updatedProject.jozour_equity_percent || 2.5
+    await c.env.DB.prepare(`
+      INSERT OR IGNORE INTO shareholdings (project_id, user_id, equity_percentage, shares_count, share_price, investment_amount, status, acquired_via)
+      VALUES (?, 1, ?, ?, 0, 0, 'active', 'platform_fee')
+    `).bind(id, jozourEquityPct, Math.floor(jozourEquityPct * 100)).run()
     
-    // Auto-create JOZOUR commission escrow record
+    // Auto-create SHERKETI commission escrow record
     const commissionAmount = updatedProject.funding_goal * (updatedProject.jozour_commission_percent / 100)
     await c.env.DB.prepare(`
       INSERT INTO escrow_transactions (project_id, transaction_type, amount, from_entity, to_entity, status)
-      VALUES (?, 'commission', ?, 'escrow', 'JOZOUR', 'completed')
+      VALUES (?, 'commission', ?, 'escrow', 'SHERKETI', 'completed')
     `).bind(id, commissionAmount).run()
 
-    // Auto-create JOZOUR board seat with 5yr term + veto for Tiers A/B/C
-    if (['A', 'B', 'C'].includes(updatedProject.tier)) {
-      const termEnd = new Date(Date.now() + 5 * 365.25 * 24 * 60 * 60 * 1000).toISOString()
-      await c.env.DB.prepare(`
-        INSERT OR IGNORE INTO board_members (project_id, user_id, role, status, has_veto, term_start, term_end, term_years)
-        VALUES (?, 1, 'jozour_observer', 'active', 1, CURRENT_TIMESTAMP, ?, 5)
-      `).bind(id, termEnd).run()
-    }
+    // Insurance Vault contribution (Add-on 8): 0.5% of each fundraising
+    const vaultContribution = updatedProject.funding_goal * 0.005
+    await c.env.DB.prepare(`
+      INSERT INTO escrow_transactions (project_id, transaction_type, amount, from_entity, to_entity, status)
+      VALUES (?, 'insurance_vault', ?, 'escrow', 'Insurance Vault', 'completed')
+    `).bind(id, vaultContribution).run()
+
+    // Auto-create SHERKETI board seat with 5yr term + veto for ALL tiers
+    const termEnd = new Date(Date.now() + 5 * 365.25 * 24 * 60 * 60 * 1000).toISOString()
+    const vetoCategories = JSON.stringify([
+      'zero_custody', 'escrow_non_approved', 'egyptian_law_violation',
+      'asset_sale_50pct', 'equity_dilution', 'platform_removal'
+    ])
+    await c.env.DB.prepare(`
+      INSERT OR IGNORE INTO board_members (project_id, user_id, role, status, has_veto, veto_categories, term_start, term_end, term_years)
+      VALUES (?, 1, 'jozour_observer', 'active', 1, ?, CURRENT_TIMESTAMP, ?, 5)
+    `).bind(id, vetoCategories, termEnd).run()
 
     await logAudit(c.env.DB, 'project_funded', 'project', id, null, JSON.stringify({ 
       funding_raised: updatedProject.funding_goal,
       jozour_commission: commissionAmount,
-      jozour_equity: ['A','B','C'].includes(updatedProject.tier) ? '2.5%' : '0%',
-      jozour_board: ['A','B','C'].includes(updatedProject.tier) ? '5yr veto' : 'none'
+      jozour_equity: '2.5%',
+      jozour_board: '5yr veto (6 categories)',
+      insurance_vault: vaultContribution
     }))
   }
 
@@ -376,7 +409,7 @@ projectRoutes.post('/:id/invest', async (c) => {
   })
 })
 
-// JOZOUR Valuation Algorithm v3.0
+// SHERKETI Valuation Algorithm v3.0
 function calculateValuation(project: any, feasibilityScore: number) {
   const sectorMultipliers: Record<string, number> = {
     'Technology': 8.5, 'FinTech': 9.0, 'Green Energy': 7.5, 'Healthcare': 7.0,
@@ -394,7 +427,7 @@ function calculateValuation(project: any, feasibilityScore: number) {
   const growthFactor = fundingGoal * growthMultiplier * 0.1
   const founderPremium = fundingGoal * (feasibilityScore > 80 ? 0.12 : feasibilityScore > 60 ? 0.06 : 0.02) * 0.05
 
-  // Deduct JOZOUR commission from valuation
+  // Deduct SHERKETI commission from valuation
   const jozourCommission = fundingGoal * 0.025 // 2.5% cash commission always
 
   const rawValuation = revenueFactor + netAssets + scorecard + growthFactor + founderPremium - jozourCommission
@@ -413,8 +446,8 @@ function calculateValuation(project: any, feasibilityScore: number) {
     },
     jozour_fees: {
       commission: { percent: '2.5%', amount: jozourCommission },
-      equity: { percent: ['A','B','C'].includes(project.tier) ? '2.5%' : '0%' },
-      board_seat: ['A','B','C'].includes(project.tier) ? '5yr with veto' : 'None'
+      equity: { percent: '2.5%' },
+      board_seat: '5yr with veto (6 categories)'
     },
     investorEquity: ((fundingGoal / (preMoney + fundingGoal)) * 100).toFixed(2) + '%'
   }

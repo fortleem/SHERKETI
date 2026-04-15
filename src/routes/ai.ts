@@ -76,7 +76,7 @@ Format as JSON: {"score":N,"risks":["..."],"strengths":["..."],"analysis":"..."}
   })
 })
 
-// AI Valuation Engine — Updated with JOZOUR 2.5% commission + 2.5% equity model
+// AI Valuation Engine — Updated with SHERKETI 2.5% commission + 2.5% equity model
 aiRoutes.post('/valuation', async (c) => {
   const { funding_goal, sector, tier, feasibility_score, revenue_estimate, assets, liabilities, founder_reputation } = await c.req.json()
 
@@ -101,9 +101,9 @@ aiRoutes.post('/valuation', async (c) => {
   const founderBonus = founderRep > 80 ? 0.12 : founderRep > 60 ? 0.06 : 0.02
   const founderFactor = funding_goal * founderBonus * 0.05
 
-  // JOZOUR fee calculation — 2.5% cash commission always
+  // SHERKETI fee calculation — Blueprint v3.1: 2.5% cash + 2.5% equity ALL tiers
   const jozourCommission = funding_goal * 0.025
-  const jozourEquityPct = tier === 'D' ? 0 : 2.5
+  const jozourEquityPct = 2.5 // ALL tiers get 2.5% equity
 
   const rawValuation = revenueFactor + assetsFactor + scorecardFactor + growthFactor + founderFactor - jozourCommission
   const preMoney = Math.round(Math.max(rawValuation, funding_goal * 0.5) / 50000) * 50000
@@ -125,9 +125,9 @@ aiRoutes.post('/valuation', async (c) => {
     },
     jozour_fees: {
       cash_commission: { percent: '2.5%', amount: Math.round(jozourCommission) },
-      equity_stake: { percent: jozourEquityPct + '%', note: tier === 'D' ? 'No equity for Tier D' : '2.5% equity stake' },
-      board_seat: tier === 'D' ? 'None' : '5-year term with veto power',
-      total_cost: `${(2.5 + jozourEquityPct).toFixed(1)}% (${2.5}% cash + ${jozourEquityPct}% equity)`
+      equity_stake: { percent: '2.5%', note: '2.5% equity stake — ALL tiers (Blueprint Rule 8)' },
+      board_seat: '5-year term with veto power (6 categories)',
+      total_cost: '5.0% (2.5% cash + 2.5% equity)'
     }
   })
 })
@@ -247,6 +247,43 @@ aiRoutes.post('/risk-assessment', async (c) => {
       equity: project.jozour_equity_percent + '%',
       commission: project.jozour_commission_percent + '%'
     }
+  })
+})
+
+// AI Fundamental Share Pricing (Blueprint Rule 9 / Add-on 1)
+aiRoutes.post('/fundamental-price', async (c) => {
+  const { project_id, eps, nav_per_share, sector, growth_rate } = await c.req.json()
+
+  const sectorPE: Record<string, number> = {
+    'Food & Beverage': 12, 'Technology': 18, 'Agriculture': 10, 'Manufacturing': 9,
+    'Tourism': 14, 'FinTech': 20, 'Green Energy': 15, 'Healthcare': 16,
+    'Education': 11, 'E-Commerce': 17, 'Real Estate': 8, 'Logistics': 12, 'Other': 10
+  }
+
+  const pe = sectorPE[sector] || 10
+  const growthMultiplier = Math.min(2.5, Math.max(1.0, 1 + (growth_rate || 20) / 100))
+  const navComponent = (nav_per_share || 0) * 0.3
+  const fundamentalPrice = (eps * pe * growthMultiplier) + navComponent
+  const priceBandLow = fundamentalPrice * 0.95
+  const priceBandHigh = fundamentalPrice * 1.05
+
+  if (project_id) {
+    try {
+      await c.env.DB.prepare(`
+        UPDATE projects SET fundamental_share_price = ?, fundamental_price_updated = CURRENT_TIMESTAMP,
+          eps = ?, nav_per_share = ?, sector_pe = ?, growth_multiplier = ?
+        WHERE id = ?
+      `).bind(Math.round(fundamentalPrice * 100) / 100, eps, nav_per_share, pe, growthMultiplier, project_id).run()
+    } catch (e) { /* ignore if columns don't exist */ }
+  }
+
+  return c.json({
+    fundamental_price: Math.round(fundamentalPrice * 100) / 100,
+    price_band: { low: Math.round(priceBandLow * 100) / 100, high: Math.round(priceBandHigh * 100) / 100 },
+    components: { eps, sector_pe: pe, growth_multiplier: growthMultiplier, nav_component: Math.round(navComponent * 100) / 100 },
+    formula: 'Price = (EPS x Sector P/E x Growth Multiplier) + (NAV per share x 0.3)',
+    band_rule: '+/-5% standard band (+/-10% for exceptional news, resets after 7 days)',
+    rule: 'Constitutional Rule #9: Fundamental-Only Share Pricing'
   })
 })
 
