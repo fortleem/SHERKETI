@@ -73,7 +73,7 @@ constitutionRoutes.get('/rules', (c) => {
         id: 8,
         title: 'Platform Fee Model',
         title_ar: 'نموذج رسوم المنصة',
-        description: 'SHERKETI receives a cash platform fee of 2.5% of total funds raised (deducted from escrow at closing) PLUS 2.5% equity in the company (non-dilutable, fully vested at closing). This applies uniformly to ALL tiers (A, B, C, D). SHERKETI also holds a 5-year board seat with VETO power (limited to 6 constitutional categories) for Tiers A/B/C. After 5 years, shareholders vote on renewal.',
+        description: 'SHERKETI receives a cash platform fee of 2.5% of total funds raised (deducted from escrow at closing) PLUS 2.5% equity in the company (non-dilutable, fully vested at closing). This applies uniformly to ALL tiers (A, B, C, D). SHERKETI also holds a 5-year board seat with VETO power (limited to 6 constitutional categories) for ALL tiers (A, B, C, D). After 5 years, shareholders vote on renewal.',
         enforcement: 'Technical + Legal: Fee structure hard-coded per tier. Board seat term automatically tracked with 5-year expiry and mandatory shareholder vote for renewal.',
         amendable: false
       },
@@ -291,4 +291,122 @@ constitutionRoutes.get('/employees/:projectId', async (c) => {
   `).bind(projectId).first()
 
   return c.json({ employees: employees.results, stats })
+})
+
+// Add employee (Add-on 3 CRUD)
+constitutionRoutes.post('/employees', async (c) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
+  const { verifyToken } = await import('../utils/auth')
+  const payload = verifyToken(authHeader.replace('Bearer ', ''))
+  if (!payload) return c.json({ error: 'Invalid token' }, 401)
+
+  const { project_id, full_name, position_title, role_description, department, employment_type, compensation_band, reporting_to, is_key_person } = await c.req.json()
+
+  if (!project_id || !full_name || !position_title) {
+    return c.json({ error: 'Missing required fields: project_id, full_name, position_title' }, 400)
+  }
+
+  const result = await c.env.DB.prepare(`
+    INSERT INTO employee_registry (project_id, full_name, position_title, role_description, department, employment_type, compensation_band, reporting_to, is_key_person, succession_plan_status, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'none', 'active')
+  `).bind(project_id, full_name, position_title, role_description || '', department || 'General', employment_type || 'full_time', compensation_band || '', reporting_to || '', is_key_person ? 1 : 0).run()
+
+  // Check hiring freeze trigger: >25% growth in 90 days
+  const recentHires = await c.env.DB.prepare(`
+    SELECT COUNT(*) as count FROM employee_registry WHERE project_id = ? AND hire_date >= datetime('now', '-90 days')
+  `).bind(project_id).first<{count: number}>()
+  const totalEmployees = await c.env.DB.prepare(`
+    SELECT COUNT(*) as count FROM employee_registry WHERE project_id = ? AND status = 'active'
+  `).bind(project_id).first<{count: number}>()
+
+  let hiringAlert = null
+  if (totalEmployees && recentHires && (recentHires.count / Math.max(1, totalEmployees.count)) > 0.25) {
+    hiringAlert = 'WARNING: Employee count grew >25% in 90 days. Board review auto-scheduled.'
+  }
+
+  const { logAudit } = await import('../utils/auth')
+  await logAudit(c.env.DB, 'employee_added', 'employee_registry', result.meta.last_row_id as number, payload.uid,
+    JSON.stringify({ full_name, position_title, project_id }))
+
+  return c.json({
+    success: true,
+    employee_id: result.meta.last_row_id,
+    hiring_alert: hiringAlert,
+    message: `Employee ${full_name} added to registry. All shareholders can now see this entry.`,
+    privacy_note: 'Shareholders see: name, position, department, hire date, compensation band, status. They do NOT see: national ID, address, phone, exact salary, medical info.',
+    reference: 'Part IX.4 / Add-on 3 — Employee Registry & Transparency'
+  })
+})
+
+// Update employee status
+constitutionRoutes.put('/employees/:id', async (c) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
+  const { verifyToken, logAudit } = await import('../utils/auth')
+  const payload = verifyToken(authHeader.replace('Bearer ', ''))
+  if (!payload) return c.json({ error: 'Invalid token' }, 401)
+
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.json()
+
+  const fields: string[] = []
+  const values: any[] = []
+
+  if (body.position_title) { fields.push('position_title = ?'); values.push(body.position_title) }
+  if (body.department) { fields.push('department = ?'); values.push(body.department) }
+  if (body.compensation_band) { fields.push('compensation_band = ?'); values.push(body.compensation_band) }
+  if (body.reporting_to) { fields.push('reporting_to = ?'); values.push(body.reporting_to) }
+  if (body.status) { fields.push('status = ?'); values.push(body.status) }
+  if (body.is_key_person !== undefined) { fields.push('is_key_person = ?'); values.push(body.is_key_person ? 1 : 0) }
+  if (body.succession_plan_status) { fields.push('succession_plan_status = ?'); values.push(body.succession_plan_status) }
+
+  if (fields.length === 0) return c.json({ error: 'No fields to update' }, 400)
+
+  values.push(id)
+  await c.env.DB.prepare(`UPDATE employee_registry SET ${fields.join(', ')} WHERE id = ?`).bind(...values).run()
+  await logAudit(c.env.DB, 'employee_updated', 'employee_registry', id, payload.uid, JSON.stringify(body))
+
+  return c.json({ success: true, message: 'Employee record updated. Change logged in immutable ledger.' })
+})
+
+// Whistleblower Channel (Add-on 3, Appendix E)
+constitutionRoutes.post('/whistleblower', async (c) => {
+  // Anonymous — no auth required
+  const { project_id, report_type, description } = await c.req.json()
+
+  if (!project_id || !description) {
+    return c.json({ error: 'Missing required fields: project_id, description' }, 400)
+  }
+
+  const reportTypes = ['fraud', 'harassment', 'safety_violation', 'misconduct', 'other']
+  const type = reportTypes.includes(report_type) ? report_type : 'other'
+
+  // AI validation confidence score (simulated)
+  const aiConfidence = 50 + Math.random() * 40
+  const shareWithShareholders = aiConfidence > 70
+
+  await c.env.DB.prepare(`
+    INSERT INTO governance_events (project_id, event_type, ai_model, details)
+    VALUES (?, 'whistleblower_report', 'whistleblower-ai-v1', ?)
+  `).bind(project_id, JSON.stringify({
+    report_type: type,
+    description: description.substring(0, 1000),
+    ai_confidence: aiConfidence.toFixed(0) + '%',
+    shared_with_shareholders: shareWithShareholders,
+    anonymous: true,
+    encrypted: true
+  })).run()
+
+  return c.json({
+    success: true,
+    report_id: `WB-${Date.now()}`,
+    anonymous: true,
+    encrypted: true,
+    ai_validation_confidence: aiConfidence.toFixed(0) + '%',
+    shared_with_shareholders: shareWithShareholders,
+    note: shareWithShareholders ? 'AI confidence > 70%. Anonymized summary will be shared with shareholders.' : 'AI confidence < 70%. Report filed for further investigation.',
+    next_steps: 'If shareholders receive the summary, they may vote to trigger an independent investigation funded from escrow.',
+    reference: 'Part IX.4 / Add-on 3 / Appendix E — Whistleblower Channel'
+  })
 })

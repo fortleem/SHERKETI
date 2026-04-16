@@ -268,6 +268,93 @@ dashboardRoutes.get('/regulator', async (c) => {
   })
 })
 
+// Accountant Dashboard
+dashboardRoutes.get('/accountant', async (c) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
+  const payload = verifyToken(authHeader.replace('Bearer ', ''))
+  if (!payload) return c.json({ error: 'Invalid token' }, 401)
+
+  // Get projects where user is independent accountant on the board
+  const assignedProjects = await c.env.DB.prepare(`
+    SELECT p.*, u.full_name as founder_name,
+      (SELECT COUNT(*) FROM shareholdings WHERE project_id = p.id AND status = 'active') as investor_count,
+      (SELECT SUM(amount) FROM escrow_transactions WHERE project_id = p.id AND status = 'completed') as total_escrow_volume
+    FROM projects p
+    INNER JOIN board_members b ON p.id = b.project_id
+    LEFT JOIN users u ON p.founder_id = u.id
+    WHERE b.user_id = ? AND b.role = 'independent_accountant' AND b.status = 'active'
+  `).bind(payload.uid).all()
+
+  // Pending dual-signature transactions (accountant approval needed)
+  const pendingDualSig = await c.env.DB.prepare(`
+    SELECT et.*, p.title, p.tier FROM escrow_transactions et
+    LEFT JOIN projects p ON et.project_id = p.id
+    WHERE et.requires_dual_signature = 1 AND et.accountant_approved = 0 AND et.status = 'pending'
+    AND et.project_id IN (
+      SELECT project_id FROM board_members WHERE user_id = ? AND role = 'independent_accountant' AND status = 'active'
+    )
+    ORDER BY et.created_at DESC
+  `).bind(payload.uid).all()
+
+  // Recent transactions requiring oversight
+  const recentTransactions = await c.env.DB.prepare(`
+    SELECT et.*, p.title FROM escrow_transactions et
+    LEFT JOIN projects p ON et.project_id = p.id
+    WHERE et.project_id IN (
+      SELECT project_id FROM board_members WHERE user_id = ? AND role = 'independent_accountant' AND status = 'active'
+    )
+    ORDER BY et.created_at DESC LIMIT 30
+  `).bind(payload.uid).all()
+
+  // Salary records pending review
+  const salaryRecords = await c.env.DB.prepare(`
+    SELECT sr.*, u.full_name, p.title as project_title FROM salary_records sr
+    LEFT JOIN users u ON sr.user_id = u.id
+    LEFT JOIN projects p ON sr.project_id = p.id
+    WHERE sr.project_id IN (
+      SELECT project_id FROM board_members WHERE user_id = ? AND role = 'independent_accountant' AND status = 'active'
+    )
+    ORDER BY sr.created_at DESC LIMIT 20
+  `).bind(payload.uid).all()
+
+  // Tax records
+  const taxRecords = await c.env.DB.prepare(`
+    SELECT tr.*, p.title as project_title FROM tax_records tr
+    LEFT JOIN projects p ON tr.project_id = p.id
+    WHERE tr.project_id IN (
+      SELECT project_id FROM board_members WHERE user_id = ? AND role = 'independent_accountant' AND status = 'active'
+    )
+    ORDER BY tr.created_at DESC LIMIT 20
+  `).bind(payload.uid).all()
+
+  // Financial alerts
+  const financialAlerts = await c.env.DB.prepare(`
+    SELECT ra.*, p.title FROM risk_alerts ra
+    LEFT JOIN projects p ON ra.project_id = p.id
+    WHERE ra.risk_category = 'financial' AND ra.status = 'active'
+    AND ra.project_id IN (
+      SELECT project_id FROM board_members WHERE user_id = ? AND role = 'independent_accountant' AND status = 'active'
+    )
+  `).bind(payload.uid).all()
+
+  return c.json({
+    assigned_projects: assignedProjects.results,
+    pending_dual_signature: pendingDualSig.results,
+    recent_transactions: recentTransactions.results,
+    salary_records: salaryRecords.results,
+    tax_records: taxRecords.results,
+    financial_alerts: financialAlerts.results,
+    transaction_approval_rules: {
+      under_1_percent: 'Manager approval only',
+      between_1_10_percent: 'Dual signature: Manager + Independent Accountant (YOU)',
+      over_10_percent: 'Full Board vote required (48h notice)',
+      recurring: 'Pre-approved with monthly caps; overrun requires dual signature',
+      emergency: 'Any two board members can approve, ratified by full board within 7 days'
+    }
+  })
+})
+
 // Platform-wide stats (public)
 dashboardRoutes.get('/platform-stats', async (c) => {
   const totalProjects = await c.env.DB.prepare('SELECT COUNT(*) as count FROM projects').first<{count:number}>()
@@ -282,7 +369,7 @@ dashboardRoutes.get('/platform-stats', async (c) => {
     total_raised: totalRaised?.total || 0,
     active_projects: activeProjects?.count || 0,
     total_users: totalUsers?.count || 0,
-    jozour_fee_model: '2.5% commission + 2.5% equity (Tiers A/B/C)',
+    jozour_fee_model: '2.5% commission + 2.5% equity (ALL tiers A/B/C/D)',
     currency: 'EGP'
   })
 })

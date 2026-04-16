@@ -181,7 +181,7 @@ function renderLanding() {
           <div class="w-16 h-16 rounded-2xl bg-purple-500/20 flex items-center justify-center mx-auto mb-4"><i class="fas fa-chart-pie text-3xl text-purple-400"></i></div>
           <div class="text-3xl font-black text-white mb-1">2.5%</div>
           <div class="text-purple-300 font-semibold">Equity Stake</div>
-          <p class="text-blue-200 text-sm mt-2">SHERKETI receives equity in EVERY project 2014 ALL tiers (A, B, C, D).</p>
+          <p class="text-blue-200 text-sm mt-2">SHERKETI receives equity in EVERY project — ALL tiers (A, B, C, D).</p>
         </div>
         <div class="bg-white/10 backdrop-blur rounded-2xl p-6 border border-white/10 text-center">
           <div class="w-16 h-16 rounded-2xl bg-amber-500/20 flex items-center justify-center mx-auto mb-4"><i class="fas fa-user-shield text-3xl text-amber-400"></i></div>
@@ -209,9 +209,9 @@ function renderLanding() {
   <!-- Constitutional Pillars -->
   <div class="bg-slate-900 py-20">
     <div class="max-w-7xl mx-auto px-4 sm:px-6">
-      <h2 class="text-3xl font-bold text-center text-white mb-12"><i class="fas fa-shield-halved text-blue-400 mr-2"></i>8 Immutable Constitutional Rules</h2>
-      <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
-        ${[{icon:'fa-vault',title:'Zero Custody',desc:'Platform never holds funds'},{icon:'fa-building-columns',title:'Escrow Only',desc:'Licensed law-firm accounts'},{icon:'fa-lock',title:'AI-Locked',desc:'Immutable governance rules'},{icon:'fa-user-shield',title:'Human-Proof',desc:'No override capability'},{icon:'fa-link',title:'Immutable Audit',desc:'Hash-chained ledger'},{icon:'fa-fingerprint',title:'One Identity',desc:'One ID per person forever'},{icon:'fa-eye',title:'Transparency',desc:'Public constitutional rules'},{icon:'fa-scale-balanced',title:'SHERKETI Fee',desc:'2.5% cash + 2.5% equity'}].map(r=>`
+      <h2 class="text-3xl font-bold text-center text-white mb-12"><i class="fas fa-shield-halved text-blue-400 mr-2"></i>10 Immutable Constitutional Rules</h2>
+      <div class="grid md:grid-cols-2 lg:grid-cols-5 gap-4">
+        ${[{icon:'fa-vault',title:'Zero Custody',desc:'Platform never holds funds'},{icon:'fa-building-columns',title:'Escrow Only',desc:'Licensed law-firm accounts'},{icon:'fa-lock',title:'AI-Locked',desc:'Immutable governance rules'},{icon:'fa-user-shield',title:'Human-Proof',desc:'No override capability'},{icon:'fa-link',title:'Immutable Audit',desc:'Hash-chained ledger'},{icon:'fa-fingerprint',title:'One Identity',desc:'One ID per person forever'},{icon:'fa-eye',title:'Transparency',desc:'Public constitutional rules'},{icon:'fa-scale-balanced',title:'SHERKETI Fee',desc:'2.5% cash + 2.5% equity'},{icon:'fa-chart-line',title:'Fundamental Pricing',desc:'AI intrinsic value only'},{icon:'fa-users-between-lines',title:'Partner Limitation',desc:'Founder investor cap + AI min'}].map(r=>`
           <div class="bg-slate-800/50 rounded-xl p-5 border border-slate-700 hover:border-blue-500/50 transition-all">
             <div class="flex items-center gap-3 mb-2"><div class="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center"><i class="fas ${r.icon} text-blue-400"></i></div><h4 class="font-bold text-white">${r.title}</h4></div>
             <p class="text-sm text-slate-400">${r.desc}</p>
@@ -223,7 +223,7 @@ function renderLanding() {
   <div class="max-w-7xl mx-auto px-4 sm:px-6 py-20">
     <h2 class="text-3xl font-bold text-center text-slate-800 mb-12">Investment Tiers</h2>
     <div class="grid md:grid-cols-4 gap-6">
-      ${[{tier:'A',name:'Seed',desc:'New Idea, No Experience',max:'3M EGP',comm:'2.5%',eq:'2.5%',board:'5yr + Veto',icon:'fa-seedling'},{tier:'B',name:'Growth',desc:'Medium Experience',max:'25M EGP',comm:'2.5%',eq:'2.5%',board:'5yr + Veto',icon:'fa-chart-line'},{tier:'C',name:'Expert',desc:'Expert Founder',max:'Unlimited',comm:'2.5%',eq:'2.5%',board:'5yr + Veto',icon:'fa-crown'},{tier:'D',name:'Expansion',desc:'Existing Company',max:'Unlimited',comm:'2.5%',eq:'0%',board:'None',icon:'fa-building'}].map(t=>`
+      ${[{tier:'A',name:'Seed',desc:'New Idea, No Experience',max:'3M EGP',comm:'2.5%',eq:'2.5%',board:'5yr + Veto',icon:'fa-seedling'},{tier:'B',name:'Growth',desc:'Medium Experience',max:'25M EGP',comm:'2.5%',eq:'2.5%',board:'5yr + Veto',icon:'fa-chart-line'},{tier:'C',name:'Expert',desc:'Expert Founder',max:'Unlimited',comm:'2.5%',eq:'2.5%',board:'5yr + Veto',icon:'fa-crown'},{tier:'D',name:'Expansion',desc:'Existing Company',max:'Unlimited',comm:'2.5%',eq:'2.5%',board:'5yr + Veto',icon:'fa-building'}].map(t=>`
         <div class="card-hover bg-white rounded-2xl overflow-hidden border border-slate-200">
           <div class="tier-badge-${t.tier} p-4 text-center">
             <i class="fas ${t.icon} text-3xl text-white mb-2"></i>

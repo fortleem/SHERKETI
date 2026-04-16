@@ -50,6 +50,11 @@ Format as JSON: {"score":N,"risks":["..."],"strengths":["..."],"analysis":"..."}
   if (tier === 'A' && funding_goal > 2000000) score -= 5
   if (tier === 'D') score += 5
 
+  // Add-on 17: Pitch Deck/Video Score Bonus
+  const pitchBonus = (c.req.query('has_deck') === 'true' ? Math.floor(Math.random() * 8) + 3 : 0) +
+                     (c.req.query('has_video') === 'true' ? Math.floor(Math.random() * 4) + 2 : 0)
+  score = Math.min(100, score + Math.min(15, pitchBonus)) // Cap at +15
+
   risks = [
     funding_goal > 10000000 ? 'High capital requirement increases execution risk' : '',
     tier === 'A' ? 'First-time founder without track record' : '',
@@ -70,6 +75,7 @@ Format as JSON: {"score":N,"risks":["..."],"strengths":["..."],"analysis":"..."}
     analysis,
     risks,
     strengths,
+    pitch_bonus: pitchBonus > 0 ? { points: Math.min(15, pitchBonus), deck: c.req.query('has_deck') === 'true', video: c.req.query('has_video') === 'true', note: 'No penalty for not uploading (Add-on 17)' } : { points: 0, note: 'No pitch materials uploaded. No penalty.' },
     model: 'feasibility-ai-v1',
     threshold: 35,
     timestamp: new Date().toISOString()
@@ -143,7 +149,7 @@ aiRoutes.post('/salary', async (c) => {
   }
 
   const tierMultipliers: Record<string, number> = { 'A': 0.8, 'B': 1.0, 'C': 1.3, 'D': 1.5 }
-  const regionalAdj: Record<string, number> = { 'cairo': 1.0, 'alexandria': 0.9, 'delta': 0.85, 'upper_egypt': 0.8, 'other': 0.85 }
+  const regionalAdj: Record<string, number> = { 'cairo': 1.0, 'alexandria': 0.9, 'delta': 0.85, 'upper_egypt': 0.8, 'suez_canal': 0.95, 'other': 0.85 }
 
   const base = baseRates[position] || 10000
   const tierMult = tierMultipliers[tier] || 1.0
@@ -152,6 +158,10 @@ aiRoutes.post('/salary', async (c) => {
   const profitFactor = 0.8 + ((company_profitability || 50) / 250)
 
   const salary = Math.round(base * tierMult * perfScore * regionAdj * profitFactor)
+
+  // Board override threshold: >200% of AI-calculated triggers notification (Part IX.2)
+  const overrideThreshold = salary * 2
+  const boardOverrideNote = 'If actual salary exceeds 200% of AI-calculated amount, automatic shareholder notification is triggered. Board can override AI by 75% vote.'
 
   return c.json({
     calculated_salary: salary,
@@ -163,8 +173,12 @@ aiRoutes.post('/salary', async (c) => {
       regional_adjustment: regionAdj,
       profit_factor: parseFloat(profitFactor.toFixed(2))
     },
+    override_threshold: overrideThreshold,
+    board_override_rule: boardOverrideNote,
+    suez_canal_adj: region === 'suez_canal' ? 0.95 : null,
     currency: 'EGP',
-    period: 'monthly'
+    period: 'monthly',
+    reference: 'Part IX.2 — AI Salary Calculation Engine'
   })
 })
 

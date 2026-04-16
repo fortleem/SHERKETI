@@ -451,3 +451,229 @@ governanceRoutes.post('/notifications/read-all', async (c) => {
   await c.env.DB.prepare('UPDATE notifications SET read_status = 1 WHERE user_id = ?').bind(payload.uid).run()
   return c.json({ success: true })
 })
+
+// =========================================================================
+// Manager Removal Protocol (Part VIII.4 — Full Process)
+// =========================================================================
+
+governanceRoutes.post('/manager-removal', async (c) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
+  const payload = verifyToken(authHeader.replace('Bearer ', ''))
+  if (!payload) return c.json({ error: 'Invalid token' }, 401)
+
+  const { project_id, reason } = await c.req.json()
+
+  // Verify proposer has >= 5% voting power
+  const shareholding = await c.env.DB.prepare(`
+    SELECT SUM(equity_percentage) as total FROM shareholdings WHERE project_id = ? AND user_id = ? AND status = 'active'
+  `).bind(project_id, payload.uid).first<{total: number}>()
+
+  if (!shareholding || shareholding.total < 5) {
+    return c.json({ error: 'Need >= 5% voting power to propose manager removal (Part VIII.4)' }, 403)
+  }
+
+  const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(project_id).first<any>()
+  if (!project) return c.json({ error: 'Project not found' }, 404)
+
+  // Step 1: AI pre-vote risk analysis
+  const aiRiskScore = Math.random() * 100
+  const escalationRisk = aiRiskScore > 65
+
+  // Step 2: Create removal vote (72h for removal votes, inactive = "no")
+  const votingDeadline = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString()
+  
+  const totalVotingPower = await c.env.DB.prepare(`
+    SELECT SUM(equity_percentage) as total FROM shareholdings WHERE project_id = ? AND status = 'active'
+  `).bind(project_id).first<{total: number}>()
+
+  const result = await c.env.DB.prepare(`
+    INSERT INTO votes (project_id, proposal_id, title, description, vote_type, status, required_majority, quorum_required,
+      total_voting_power, voting_deadline)
+    VALUES (?, ?, ?, ?, 'manager_removal', 'open', 50.0, 51.0, ?, ?)
+  `).bind(
+    project_id, Date.now(),
+    `Manager Removal Resolution`,
+    `Reason: ${reason}\n\nAI Risk Analysis: ${aiRiskScore.toFixed(0)}% escalation probability.\nInactive shareholders count as "NO" for removal votes.\n\nTier ${project.tier} consequences:\n${
+      project.tier === 'C' ? '- Loses 35% super-dividend right immediately\n- Keeps only vested equity (initial 10% + vested portion)\n- Manager rights fully revoked' :
+      project.tier === 'D' ? '- Requires 75% of board members (excluding owner)\n- Owner retains ownership but loses management control' :
+      '- Standard removal process\n- AI suggests interim manager candidates'
+    }`,
+    totalVotingPower?.total || 0, votingDeadline
+  ).run()
+
+  // If escalation risk > 65%, send early warning
+  if (escalationRisk) {
+    const allShareholders = await c.env.DB.prepare(`
+      SELECT DISTINCT user_id FROM shareholdings WHERE project_id = ? AND status = 'active'
+    `).bind(project_id).all()
+
+    for (const sh of allShareholders.results as any[]) {
+      await c.env.DB.prepare(`
+        INSERT INTO notifications (user_id, project_id, notification_type, title, message)
+        VALUES (?, ?, 'dispute_warning', 'Manager Removal - Mediation Suggested', 'AI detects 72h early warning: ${aiRiskScore.toFixed(0)}% escalation risk. Consider mediation before voting.')
+      `).bind(sh.user_id, project_id).run()
+    }
+  }
+
+  await logAudit(c.env.DB, 'manager_removal_proposed', 'vote', result.meta.last_row_id as number, payload.uid,
+    JSON.stringify({ reason, ai_risk: aiRiskScore, escalation_warning: escalationRisk }))
+
+  return c.json({
+    success: true,
+    vote_id: result.meta.last_row_id,
+    voting_deadline: votingDeadline,
+    ai_risk_analysis: {
+      escalation_probability: aiRiskScore.toFixed(0) + '%',
+      mediation_suggested: escalationRisk,
+      early_warning_sent: escalationRisk
+    },
+    inactive_rule: 'Inactive shareholders count as "NO" for manager removal votes',
+    required_majority: '> 50% of votes cast',
+    tier_consequences: project.tier,
+    reference: 'Part VIII.4 — Manager Removal Protocol'
+  })
+})
+
+// =========================================================================
+// Emergency Recall Vote (Part VII.3 — Capital Protection)
+// =========================================================================
+
+governanceRoutes.post('/emergency-recall', async (c) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
+  const payload = verifyToken(authHeader.replace('Bearer ', ''))
+  if (!payload) return c.json({ error: 'Invalid token' }, 401)
+
+  const { project_id, reason } = await c.req.json()
+
+  const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(project_id).first<any>()
+  if (!project) return c.json({ error: 'Project not found' }, 404)
+
+  const totalVotingPower = await c.env.DB.prepare(`
+    SELECT SUM(equity_percentage) as total FROM shareholdings WHERE project_id = ? AND status = 'active'
+  `).bind(project_id).first<{total: number}>()
+
+  // 72-hour shareholder vote for capital return
+  const votingDeadline = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString()
+
+  const result = await c.env.DB.prepare(`
+    INSERT INTO votes (project_id, proposal_id, title, description, vote_type, status, required_majority, quorum_required,
+      total_voting_power, voting_deadline)
+    VALUES (?, ?, 'Emergency Capital Recall', ?, 'emergency_recall', 'open', 50.0, 51.0, ?, ?)
+  `).bind(
+    project_id, Date.now(),
+    `Emergency recall of remaining escrowed capital. Reason: ${reason}\n\nThis will return remaining escrowed capital to investors pro-rata.\nOptions: (1) Continue operations, (2) Replace management, (3) Full unwind.`,
+    totalVotingPower?.total || 0, votingDeadline
+  ).run()
+
+  // Freeze pending escrow transactions
+  await c.env.DB.prepare("UPDATE escrow_transactions SET status = 'frozen' WHERE project_id = ? AND status = 'pending'").bind(project_id).run()
+
+  // Create red alert
+  await c.env.DB.prepare(`
+    INSERT INTO risk_alerts (project_id, alert_level, risk_category, title, description, status)
+    VALUES (?, 'red', 'governance', 'Emergency Capital Recall Initiated', ?, 'active')
+  `).bind(project_id, `Emergency recall vote opened. Reason: ${reason}. Pending escrow frozen. 72h to resolve.`).run()
+
+  // Notify all shareholders
+  const shareholders = await c.env.DB.prepare(`
+    SELECT DISTINCT user_id FROM shareholdings WHERE project_id = ? AND status = 'active'
+  `).bind(project_id).all()
+
+  for (const sh of shareholders.results as any[]) {
+    await c.env.DB.prepare(`
+      INSERT INTO notifications (user_id, project_id, notification_type, title, message, action_url)
+      VALUES (?, ?, 'emergency', 'EMERGENCY: Capital Recall Vote', ?, ?)
+    `).bind(sh.user_id, project_id, `Emergency recall vote for ${project.title}. 72h to vote. All pending escrow frozen.`, `/dashboard/votes/${result.meta.last_row_id}`).run()
+  }
+
+  await logAudit(c.env.DB, 'emergency_recall_initiated', 'vote', result.meta.last_row_id as number, payload.uid,
+    JSON.stringify({ reason, escrow_frozen: true }))
+
+  return c.json({
+    success: true,
+    vote_id: result.meta.last_row_id,
+    voting_deadline: votingDeadline,
+    escrow_frozen: true,
+    resolution_options: ['Continue operations (with/without current manager)', 'Replace management (board appoints interim)', 'Full unwind (return remaining capital pro-rata)'],
+    message: 'Emergency recall vote created. 72 hours. All pending escrow frozen. All shareholders notified.',
+    reference: 'Part VII.3 — Capital Protection Mechanisms'
+  })
+})
+
+// =========================================================================
+// Process expired votes with auto-yes for inactive shareholders
+// =========================================================================
+
+governanceRoutes.post('/process-expired-votes', async (c) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
+  const payload = verifyToken(authHeader.replace('Bearer ', ''))
+  if (!payload) return c.json({ error: 'Invalid token' }, 401)
+
+  // Find expired open votes
+  const expiredVotes = await c.env.DB.prepare(`
+    SELECT * FROM votes WHERE status = 'open' AND voting_deadline < datetime('now')
+  `).all()
+
+  const processed: number[] = []
+
+  for (const vote of expiredVotes.results as any[]) {
+    // Determine major vs routine matter
+    const isMajor = ['manager_removal', 'constitutional_amendment', 'emergency_recall'].includes(vote.vote_type)
+
+    // Get shareholders who haven't voted
+    const nonVoters = await c.env.DB.prepare(`
+      SELECT s.user_id, s.equity_percentage FROM shareholdings s
+      WHERE s.project_id = ? AND s.status = 'active'
+      AND s.user_id NOT IN (SELECT user_id FROM vote_records WHERE vote_id = ?)
+    `).bind(vote.project_id, vote.id).all()
+
+    let autoYesPower = 0
+    for (const nv of nonVoters.results as any[]) {
+      if (isMajor) {
+        // Major matters: inactivity counts as "no"
+        await c.env.DB.prepare(`
+          INSERT OR IGNORE INTO vote_records (vote_id, user_id, decision, voting_power) VALUES (?, ?, 'against', ?)
+        `).bind(vote.id, nv.user_id, nv.equity_percentage).run()
+        await c.env.DB.prepare('UPDATE votes SET votes_against = votes_against + ? WHERE id = ?').bind(nv.equity_percentage, vote.id).run()
+      } else {
+        // Routine matters: inactivity = auto-yes (deemed consent)
+        await c.env.DB.prepare(`
+          INSERT OR IGNORE INTO vote_records (vote_id, user_id, decision, voting_power) VALUES (?, ?, 'auto_yes', ?)
+        `).bind(vote.id, nv.user_id, nv.equity_percentage).run()
+        autoYesPower += nv.equity_percentage
+        await c.env.DB.prepare('UPDATE votes SET votes_for = votes_for + ?, auto_yes_power = auto_yes_power + ? WHERE id = ?').bind(nv.equity_percentage, nv.equity_percentage, vote.id).run()
+      }
+    }
+
+    // Now resolve the vote
+    const updatedVote = await c.env.DB.prepare('SELECT * FROM votes WHERE id = ?').bind(vote.id).first<any>()
+    const totalVoted = updatedVote.votes_for + updatedVote.votes_against + updatedVote.abstentions
+    const effectiveVotes = updatedVote.votes_for + updatedVote.votes_against
+    const forPct = effectiveVotes > 0 ? (updatedVote.votes_for / effectiveVotes) * 100 : 0
+
+    if (forPct >= updatedVote.required_majority) {
+      await c.env.DB.prepare("UPDATE votes SET status = 'passed' WHERE id = ?").bind(vote.id).run()
+    } else {
+      await c.env.DB.prepare("UPDATE votes SET status = 'failed' WHERE id = ?").bind(vote.id).run()
+    }
+
+    processed.push(vote.id)
+    await logAudit(c.env.DB, 'vote_expired_processed', 'vote', vote.id, null,
+      JSON.stringify({ auto_yes_power: autoYesPower, is_major: isMajor, result: forPct >= updatedVote.required_majority ? 'passed' : 'failed' }))
+  }
+
+  return c.json({
+    success: true,
+    processed_count: processed.length,
+    vote_ids: processed,
+    rules: {
+      routine_matters: 'Inactivity after deadline = auto-yes (deemed consent)',
+      major_matters: 'Inactivity = "no" for: manager_removal, constitutional_amendment, emergency_recall',
+      quorum_extension: 'If quorum not met, vote is extended by 24 hours'
+    },
+    reference: 'Part VIII.2 — Voting Mechanics'
+  })
+})

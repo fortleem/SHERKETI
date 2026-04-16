@@ -139,3 +139,172 @@ marketRoutes.get('/stats/:projectId', async (c) => {
 
   return c.json({ active_orders: activeOrders, completed_trades: completedTrades })
 })
+
+// =========================================================================
+// FIFO Order Matching (Part XI.3) - Single price, no bids/asks
+// =========================================================================
+
+marketRoutes.post('/match-orders', async (c) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
+  const payload = verifyToken(authHeader.replace('Bearer ', ''))
+  if (!payload || payload.role !== 'admin') return c.json({ error: 'Admin access required' }, 403)
+
+  const { project_id } = await c.req.json()
+
+  // Get current fundamental price
+  const project = await c.env.DB.prepare('SELECT fundamental_share_price FROM projects WHERE id = ?').bind(project_id).first<any>()
+  if (!project?.fundamental_share_price) {
+    return c.json({ error: 'No fundamental price set for this project. Use /api/ai/fundamental-price first.' }, 400)
+  }
+
+  const aiPrice = project.fundamental_share_price
+  const priceLow = aiPrice * 0.95
+  const priceHigh = aiPrice * 1.05
+
+  // Get sell orders (FIFO by creation date)
+  const sellOrders = await c.env.DB.prepare(`
+    SELECT * FROM market_orders WHERE project_id = ? AND status IN ('listed','priority_window')
+    AND ask_price BETWEEN ? AND ?
+    ORDER BY created_at ASC
+  `).bind(project_id, priceLow, priceHigh).all()
+
+  // Get pending buy orders
+  const buyOrders = await c.env.DB.prepare(`
+    SELECT * FROM market_orders WHERE project_id = ? AND status = 'pending_board' AND buyer_id IS NOT NULL
+    ORDER BY created_at ASC
+  `).bind(project_id).all()
+
+  const matched: number[] = []
+  
+  // FIFO matching
+  for (const sell of sellOrders.results as any[]) {
+    for (const buy of buyOrders.results as any[]) {
+      if (buy.shares_count === sell.shares_count) {
+        // Match at AI fundamental price
+        await c.env.DB.prepare(`
+          UPDATE market_orders SET status = 'completed', completed_at = CURRENT_TIMESTAMP, bid_price = ?, fundamental_price = ? WHERE id = ?
+        `).bind(aiPrice, aiPrice, sell.id).run()
+
+        await logAudit(c.env.DB, 'market_order_matched', 'market_order', sell.id, null,
+          JSON.stringify({ buyer: buy.buyer_id, seller: sell.seller_id, price: aiPrice, shares: sell.shares_count }))
+        
+        matched.push(sell.id)
+        break
+      }
+    }
+  }
+
+  return c.json({
+    success: true,
+    matched_count: matched.length,
+    order_ids: matched,
+    ai_price: aiPrice,
+    price_band: { low: Math.round(priceLow * 100) / 100, high: Math.round(priceHigh * 100) / 100 },
+    matching_rule: 'FIFO (first-in-first-out) at AI fundamental price',
+    reference: 'Part XI.3 — Trading Rules Under Fundamental Pricing'
+  })
+})
+
+// =========================================================================
+// Block Trade (>5% of shares) with ±10% negotiation (Part XI.3)
+// =========================================================================
+
+marketRoutes.post('/block-trade', async (c) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
+  const payload = verifyToken(authHeader.replace('Bearer ', ''))
+  if (!payload) return c.json({ error: 'Invalid token' }, 401)
+
+  const { project_id, shares_count, negotiated_price, reason } = await c.req.json()
+
+  const project = await c.env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(project_id).first<any>()
+  if (!project) return c.json({ error: 'Project not found' }, 404)
+
+  const totalShares = project.total_shares || 10000
+  const blockThreshold = totalShares * 0.05
+
+  if (shares_count < blockThreshold) {
+    return c.json({ error: `Block trade requires >5% of total shares (${blockThreshold}). Use normal sell order instead.` }, 400)
+  }
+
+  // Verify ±10% of AI price
+  const aiPrice = project.fundamental_share_price
+  if (!aiPrice) return c.json({ error: 'No fundamental price set' }, 400)
+
+  const minPrice = aiPrice * 0.9
+  const maxPrice = aiPrice * 1.1
+
+  if (negotiated_price < minPrice || negotiated_price > maxPrice) {
+    return c.json({ error: `Block trade price must be within ±10% of AI price (${minPrice.toFixed(2)} - ${maxPrice.toFixed(2)} EGP)` }, 400)
+  }
+
+  // Verify shareholding
+  const shareholding = await c.env.DB.prepare(`
+    SELECT * FROM shareholdings WHERE project_id = ? AND user_id = ? AND status = 'active'
+  `).bind(project_id, payload.uid).first<any>()
+
+  if (!shareholding || shareholding.shares_count < shares_count) {
+    return c.json({ error: 'Insufficient shares' }, 400)
+  }
+
+  const equityPercent = (shares_count / shareholding.shares_count) * shareholding.equity_percentage
+  const result = await c.env.DB.prepare(`
+    INSERT INTO market_orders (project_id, seller_id, shares_count, equity_percentage, ask_price, ai_valuation, fundamental_price,
+      price_band_low, price_band_high, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_board')
+  `).bind(project_id, payload.uid, shares_count, equityPercent, negotiated_price, aiPrice, aiPrice, minPrice, maxPrice).run()
+
+  await logAudit(c.env.DB, 'block_trade_created', 'market_order', result.meta.last_row_id as number, payload.uid,
+    JSON.stringify({ shares: shares_count, negotiated_price, ai_price: aiPrice, reason, deviation: ((negotiated_price / aiPrice - 1) * 100).toFixed(1) + '%' }))
+
+  return c.json({
+    success: true,
+    order_id: result.meta.last_row_id,
+    shares_count,
+    negotiated_price,
+    ai_price: aiPrice,
+    deviation: ((negotiated_price / aiPrice - 1) * 100).toFixed(1) + '%',
+    requires_law_firm_notarization: true,
+    reason_logged: reason,
+    message: 'Block trade created. Requires law firm notarization with documented reason.',
+    reference: 'Part XI.3 — Block Trade Exceptions (±10% for >5% transfers)'
+  })
+})
+
+// =========================================================================
+// Liquidity Reserve Backstop (Part XI.3)
+// =========================================================================
+
+marketRoutes.get('/liquidity-reserve', async (c) => {
+  // Track excess sell orders vs buy orders
+  const projectStats = await c.env.DB.prepare(`
+    SELECT mo.project_id, p.title, p.fundamental_share_price,
+      SUM(CASE WHEN mo.status IN ('listed','priority_window') THEN mo.shares_count ELSE 0 END) as sell_orders,
+      SUM(CASE WHEN mo.status = 'pending_board' AND mo.buyer_id IS NOT NULL THEN mo.shares_count ELSE 0 END) as buy_orders
+    FROM market_orders mo
+    LEFT JOIN projects p ON mo.project_id = p.id
+    GROUP BY mo.project_id
+  `).all()
+
+  // 0.1% of all primary fundraising cash fees = liquidity reserve
+  const totalFees = await c.env.DB.prepare(`
+    SELECT SUM(amount) as total FROM escrow_transactions WHERE transaction_type = 'commission' AND status = 'completed'
+  `).first<{total: number}>()
+
+  const reserveBalance = (totalFees?.total || 0) * 0.001 // 0.1% of total commission
+
+  return c.json({
+    liquidity_reserve_balance: Math.round(reserveBalance),
+    funded_by: '0.1% of all primary fundraising cash fees',
+    purpose: 'Backstop for excess sell orders — buys shares when sell > buy for 5 consecutive days',
+    project_liquidity: projectStats.results,
+    rules: {
+      trigger: 'Sell orders exceed buy orders for 5 consecutive days',
+      action: 'Reserve buys excess shares at AI fundamental price',
+      hold: 'Reserve holds until buy orders return, sells at current AI price',
+      principle: 'Never sells at a loss — holds until price recovery'
+    },
+    reference: 'Part XI.3 — Liquidity Guarantee via Platform Backstop'
+  })
+})
