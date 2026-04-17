@@ -1,7 +1,7 @@
 -- SHERKETI Platform Complete Database Schema v3.1
 -- Constitutional AI-Governed Equity Crowdfunding Platform
 -- Blueprint v3.1 Alignment: 2.5% cash + 2.5% equity ALL TIERS (A/B/C/D)
--- 5yr board seat with veto (Tiers A/B/C) + 10 Constitutional Rules
+-- 5yr board seat with veto ALL TIERS (A/B/C/D) + 10 Constitutional Rules
 
 -- Users Table (KYC/Identity)
 CREATE TABLE IF NOT EXISTS users (
@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS shareholdings (
   dividend_bonus REAL DEFAULT 0,
   voting_power REAL,
   status TEXT DEFAULT 'active' CHECK(status IN ('active','reserved','vesting','frozen','sold','transferred')),
-  acquired_via TEXT DEFAULT 'primary' CHECK(acquired_via IN ('primary','secondary','vesting','platform_fee','commission','founder_allocation')),
+  acquired_via TEXT DEFAULT 'primary' CHECK(acquired_via IN ('primary','secondary','vesting','platform_fee','commission','founder_allocation','employee_conversion')),
   reserved_until DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
