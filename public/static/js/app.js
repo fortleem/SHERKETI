@@ -1,781 +1,1477 @@
-// SHERKETI Platform v2.0 — Complete Frontend Application
-// AI-Governed Equity Crowdfunding Platform for Egypt
-// Blueprint v3.1: 2.5% Cash + 2.5% Equity ALL Tiers + 5yr Board Seat + 10 Constitutional Rules
+// ============================================================================
+// SHERKETI Platform v3.3.0 — Full Dashboard UI
+// AI-Governed Equity Crowdfunding for Egypt
+// ============================================================================
 
 const API = '';
 let currentUser = null;
-let currentToken = localStorage.getItem('sherketi_token');
+let token = localStorage.getItem('sherketi_token');
 let currentPage = 'landing';
-let platformStats = null;
+let pageParams = {};
 
-// ============ API Helper ============
-async function api(path, options = {}) {
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-  if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`;
+// ---------- API Helper ----------
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   try {
-    const res = await fetch(`${API}${path}`, { ...options, headers });
+    const res = await fetch(`${API}${path}`, { ...opts, headers });
     const data = await res.json();
-    if (!res.ok && data.error) throw new Error(data.error);
+    if (!res.ok) throw { status: res.status, ...data };
     return data;
-  } catch (e) { console.error('API Error:', e); throw e; }
+  } catch (e) {
+    if (e.status === 401) { logout(); }
+    throw e;
+  }
 }
 
-// ============ State ============
-function setState(key, value) { window._state = window._state || {}; window._state[key] = value; }
-function getState(key) { return (window._state || {})[key]; }
+// ---------- Format Helpers ----------
+const fEGP = n => n == null ? '—' : `${Number(n).toLocaleString('en-EG')} EGP`;
+const fPct = n => n == null ? '—' : `${Number(n).toFixed(2)}%`;
+const fDate = d => d ? new Date(d).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }) : '—';
+const fTime = d => d ? new Date(d).toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' }) : '—';
+const timeAgo = d => { if (!d) return '—'; const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000); if (s < 60) return s + 's ago'; if (s < 3600) return Math.floor(s/60) + 'm ago'; if (s < 86400) return Math.floor(s/3600) + 'h ago'; return Math.floor(s/86400) + 'd ago'; };
+const statusColor = s => ({ active:'emerald', funded:'blue', live_fundraising:'purple', interest_phase:'amber', draft:'gray', rejected:'red', frozen:'red', dissolved:'red', ai_review:'indigo' }[s] || 'gray');
+const tierBadge = t => `<span class="px-2 py-0.5 rounded-full text-xs font-bold text-white tier-badge-${t}">Tier ${t}</span>`;
+const statusDot = s => `<span class="status-dot status-${s === 'active' || s === 'funded' ? 'active' : s === 'frozen' || s === 'rejected' ? 'frozen' : 'pending'}"></span>`;
 
-// ============ Router ============
+// ---------- Navigation ----------
 function navigate(page, params = {}) {
   currentPage = page;
-  setState('params', params);
+  pageParams = params;
   render();
   window.scrollTo(0, 0);
 }
 
-// ============ Formatters ============
-function formatEGP(amount) {
-  if (!amount && amount !== 0) return '0 EGP';
-  return new Intl.NumberFormat('en-EG', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(amount) + ' EGP';
-}
-function formatPercent(val) { return (val || 0).toFixed(2) + '%'; }
-function formatDate(d) { if (!d) return '-'; return new Date(d).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }); }
-function timeAgo(d) {
-  if (!d) return '';
-  const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000);
-  if (s < 60) return 'just now'; if (s < 3600) return Math.floor(s/60) + 'm ago';
-  if (s < 86400) return Math.floor(s/3600) + 'h ago'; return Math.floor(s/86400) + 'd ago';
-}
-function tierColor(t) { return { A:'emerald',B:'blue',C:'purple',D:'amber' }[t] || 'gray'; }
-function statusIcon(status) {
-  const m = { active:'fa-circle-check text-emerald-500', funded:'fa-circle-check text-emerald-500', live_fundraising:'fa-signal text-blue-500', interest_phase:'fa-eye text-amber-500', draft:'fa-file-pen text-slate-400', frozen:'fa-snowflake text-red-500', rejected:'fa-circle-xmark text-red-500', dissolved:'fa-ban text-slate-500', ai_review:'fa-robot text-purple-500', operational:'fa-gear text-emerald-500' };
-  return m[status] || 'fa-circle text-slate-400';
-}
-function roleLabel(r) {
-  const m = { investor:'Investor', founder:'Founder', manager:'Manager', accountant:'Accountant', law_firm:'Law Firm', admin:'SHERKETI Admin', regulator:'FRA Regulator' };
-  return m[r] || r;
-}
-function boardRoleLabel(r) {
-  const m = { founder_rep:'Founder Rep', manager:'Manager', independent_accountant:'Accountant', shareholder_rep:'Shareholder Rep', jozour_observer:'SHERKETI Observer' };
-  return m[r] || r;
+function logout() {
+  token = null; currentUser = null;
+  localStorage.removeItem('sherketi_token');
+  navigate('landing');
 }
 
-// ============ Init ============
+// ---------- Toast ----------
+function showToast(msg, type = 'success') {
+  const el = document.createElement('div');
+  el.className = `fixed top-4 right-4 z-[200] px-6 py-3 rounded-xl shadow-2xl text-white font-semibold text-sm fade-in ${type === 'error' ? 'bg-red-500' : type === 'warning' ? 'bg-amber-500' : 'bg-emerald-500'}`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+// ---------- Modal ----------
+function showModal(title, content, actions = '') {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 p-6 fade-in max-h-[80vh] overflow-y-auto">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-bold text-slate-800">${title}</h3>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="text-slate-600 text-sm">${content}</div>
+      ${actions ? `<div class="flex gap-3 mt-6 justify-end">${actions}</div>` : ''}
+    </div>`;
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+  document.body.appendChild(overlay);
+}
+function closeModal() { document.getElementById('modal-overlay')?.remove(); }
+
+// ---------- Init ----------
 async function init() {
-  if (currentToken) {
+  if (token) {
     try {
       const data = await api('/api/auth/me');
       currentUser = data.user;
       navigate('dashboard');
-    } catch { currentToken = null; localStorage.removeItem('sherketi_token'); navigate('landing'); }
-  } else { navigate('landing'); }
-  try { platformStats = await api('/api/dashboard/platform-stats'); } catch {}
+    } catch { logout(); }
+  } else {
+    render();
+  }
 }
 
-// ============ Main Render ============
+// ---------- Main Render ----------
 function render() {
   const app = document.getElementById('app');
   if (!app) return;
-  let html = '';
-  switch(currentPage) {
-    case 'landing': html = renderLanding(); break;
-    case 'login': html = renderAuth('login'); break;
-    case 'register': html = renderAuth('register'); break;
-    case 'dashboard': html = renderDashboard(); break;
-    case 'projects': html = renderProjectsList(); break;
-    case 'project-detail': html = renderProjectDetail(); break;
-    case 'create-project': html = renderCreateProject(); break;
-    case 'constitution': html = renderConstitution(); break;
-    case 'market': html = renderSecondaryMarket(); break;
-    case 'admin': html = renderAdmin(); break;
-    case 'ai-tools': html = renderAITools(); break;
-    case 'notifications': html = renderNotifications(); break;
-    default: html = renderLanding();
+  app.innerHTML = '';
+  
+  if (currentUser) {
+    app.innerHTML = renderNav() + `<div class="flex min-h-screen"><aside class="w-64 bg-white border-r border-slate-200 pt-20 pb-8 px-4 fixed h-full overflow-y-auto z-30 hidden lg:block">${renderSidebar()}</aside><main class="flex-1 lg:ml-64 pt-20 pb-12 px-4 sm:px-6 lg:px-8">${renderCurrentPage()}</main></div>`;
+  } else {
+    app.innerHTML = renderCurrentPage();
   }
-  app.innerHTML = html;
-  attachEvents();
+  
+  bindEvents();
 }
 
-// ============ Nav ============
+// ---------- Navigation Bar ----------
 function renderNav() {
-  const isLoggedIn = !!currentUser;
-  return `
-  <nav class="glass fixed top-0 left-0 right-0 z-50 border-b border-slate-200/50">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6">
-      <div class="flex items-center justify-between h-16">
-        <div class="flex items-center gap-3 cursor-pointer" onclick="navigate('${isLoggedIn?'dashboard':'landing'}')">
-          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center shadow-lg shadow-blue-500/25">
-            <i class="fas fa-shield-halved text-white text-lg"></i>
+  return `<nav class="fixed top-0 left-0 right-0 z-40 glass border-b border-slate-200/50">
+    <div class="max-w-screen-2xl mx-auto px-4 sm:px-6 flex items-center justify-between h-16">
+      <div class="flex items-center gap-3">
+        <button id="mobile-menu-btn" class="lg:hidden text-slate-600 hover:text-primary-600"><i class="fas fa-bars text-xl"></i></button>
+        <a href="#" onclick="navigate('dashboard');return false" class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-primary-500 to-accent-600 flex items-center justify-center text-white font-bold text-sm">S</div>
+          <span class="font-bold text-lg gradient-text hidden sm:inline">SHERKETI</span>
+        </a>
+        <span class="text-xs text-slate-400 hidden md:inline">v3.3.0</span>
+      </div>
+      <div class="flex items-center gap-4">
+        <button onclick="navigate('notifications')" class="relative text-slate-500 hover:text-primary-600">
+          <i class="fas fa-bell text-lg"></i>
+          <span id="notif-badge" class="hidden absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] flex items-center justify-center"></span>
+        </button>
+        <div class="flex items-center gap-2 cursor-pointer" onclick="navigate('profile')">
+          <div class="w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 font-semibold text-sm">${(currentUser?.full_name || 'U').charAt(0)}</div>
+          <div class="hidden sm:block">
+            <div class="text-sm font-semibold text-slate-700">${currentUser?.full_name || 'User'}</div>
+            <div class="text-xs text-slate-400 capitalize">${currentUser?.role || ''}</div>
           </div>
-          <div><span class="text-xl font-bold gradient-text">SHERKETI</span><span class="text-[10px] text-slate-500 block -mt-1 font-cairo">شركتي</span></div>
         </div>
-        <div class="hidden md:flex items-center gap-1">
-          <a onclick="navigate('projects')" class="px-3 py-2 rounded-lg text-sm font-medium text-slate-600 hover:text-blue-600 hover:bg-blue-50 cursor-pointer transition-all"><i class="fas fa-rocket mr-1"></i>Projects</a>
-          <a onclick="navigate('constitution')" class="px-3 py-2 rounded-lg text-sm font-medium text-slate-600 hover:text-blue-600 hover:bg-blue-50 cursor-pointer transition-all"><i class="fas fa-scroll mr-1"></i>Constitution</a>
-          <a onclick="navigate('market')" class="px-3 py-2 rounded-lg text-sm font-medium text-slate-600 hover:text-blue-600 hover:bg-blue-50 cursor-pointer transition-all"><i class="fas fa-chart-line mr-1"></i>Market</a>
-          ${isLoggedIn ? `
-          <a onclick="navigate('ai-tools')" class="px-3 py-2 rounded-lg text-sm font-medium text-slate-600 hover:text-blue-600 hover:bg-blue-50 cursor-pointer transition-all"><i class="fas fa-brain mr-1"></i>AI Tools</a>
-          ${currentUser?.role==='admin'?`<a onclick="navigate('admin')" class="px-3 py-2 rounded-lg text-sm font-medium text-red-600 hover:bg-red-50 cursor-pointer transition-all"><i class="fas fa-cog mr-1"></i>Admin</a>`:''}
-          ` : ''}
-        </div>
-        <div class="flex items-center gap-3">
-          ${isLoggedIn ? `
-            <button onclick="navigate('notifications')" class="relative text-slate-500 hover:text-blue-600 p-2"><i class="fas fa-bell"></i><span id="notifBadge" class="hidden absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center"></span></button>
-            <div class="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-lg">
-              <div class="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white text-xs font-bold">${(currentUser.full_name||'U')[0]}</div>
-              <div class="text-xs">
-                <div class="font-semibold text-slate-800">${currentUser.full_name}</div>
-                <div class="text-slate-500 capitalize">${roleLabel(currentUser.role)} <span class="text-amber-600">${currentUser.reputation_score}★</span></div>
-              </div>
-            </div>
-            <button onclick="navigate('dashboard')" class="btn-primary text-xs py-2 px-3"><i class="fas fa-chart-pie mr-1"></i>Dashboard</button>
-            <button onclick="logout()" class="text-slate-400 hover:text-red-500 transition-colors" title="Logout"><i class="fas fa-sign-out-alt"></i></button>
-          ` : `
-            <button onclick="navigate('login')" class="btn-secondary text-sm">Log In</button>
-            <button onclick="navigate('register')" class="btn-primary text-sm">Get Started</button>
-          `}
-        </div>
+        <button onclick="logout()" class="text-slate-400 hover:text-red-500 text-sm"><i class="fas fa-sign-out-alt"></i></button>
       </div>
     </div>
   </nav>`;
 }
 
-// ============ Landing ============
-function renderLanding() {
-  const s = platformStats || { total_projects:3, total_investors:4, total_raised:30000000, active_projects:3 };
-  return `${renderNav()}
-  <div class="hero-gradient pt-16">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-20 md:py-32">
-      <div class="text-center fade-in">
-        <div class="inline-flex items-center gap-2 px-4 py-2 bg-white/10 rounded-full text-blue-200 text-sm mb-6 backdrop-blur"><i class="fas fa-shield-halved"></i><span>Constitutionally Governed Equity Platform</span></div>
-        <h1 class="text-4xl md:text-6xl lg:text-7xl font-black text-white mb-6 leading-tight">Democratize Private<br><span class="bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">Company Ownership</span></h1>
-        <p class="text-lg md:text-xl text-blue-100 max-w-3xl mx-auto mb-4 leading-relaxed">Invest in Egyptian LLCs from <strong class="text-white">50 EGP</strong>. Protected by zero-custody architecture, AI-locked governance, and licensed law-firm escrow.</p>
-        <p class="ar-text text-xl text-blue-200 mb-10 font-cairo">شركتي - استثمر في الشركات المصرية من ٥٠ جنيه</p>
-        <div class="flex flex-col sm:flex-row gap-4 justify-center mb-16">
-          <button onclick="navigate('register')" class="px-8 py-4 bg-white text-blue-700 rounded-xl font-bold text-lg hover:bg-blue-50 transition-all hover:scale-105 shadow-xl"><i class="fas fa-rocket mr-2"></i>Start Investing</button>
-          <button onclick="navigate('projects')" class="px-8 py-4 bg-white/10 text-white rounded-xl font-bold text-lg hover:bg-white/20 transition-all backdrop-blur border border-white/20"><i class="fas fa-search mr-2"></i>Explore Projects</button>
-        </div>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto">
-          ${[{icon:'fa-building',value:s.total_projects,label:'Projects',color:'blue'},{icon:'fa-users',value:s.total_investors,label:'Investors',color:'purple'},{icon:'fa-coins',value:formatEGP(s.total_raised),label:'Total Raised',color:'emerald'},{icon:'fa-chart-line',value:s.active_projects,label:'Active',color:'amber'}].map(x=>`
-            <div class="bg-white/10 backdrop-blur rounded-xl p-4 border border-white/10">
-              <i class="fas ${x.icon} text-2xl text-${x.color}-400 mb-2"></i>
-              <div class="text-2xl font-bold text-white">${x.value}</div>
-              <div class="text-sm text-blue-200">${x.label}</div>
-            </div>`).join('')}
-        </div>
-      </div>
-    </div>
-  </div>
-  <!-- SHERKETI Fee Model Section -->
-  <div class="bg-gradient-to-r from-blue-900 to-purple-900 py-16">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6">
-      <h2 class="text-3xl font-bold text-center text-white mb-3"><i class="fas fa-hand-holding-dollar text-amber-400 mr-2"></i>SHERKETI Platform Fee Model</h2>
-      <p class="text-center text-blue-200 mb-10 max-w-2xl mx-auto">Transparent, constitutional fee structure. No hidden costs.</p>
-      <div class="grid md:grid-cols-3 gap-6 max-w-4xl mx-auto mb-8">
-        <div class="bg-white/10 backdrop-blur rounded-2xl p-6 border border-white/10 text-center">
-          <div class="w-16 h-16 rounded-2xl bg-emerald-500/20 flex items-center justify-center mx-auto mb-4"><i class="fas fa-percentage text-3xl text-emerald-400"></i></div>
-          <div class="text-3xl font-black text-white mb-1">2.5%</div>
-          <div class="text-emerald-300 font-semibold">Cash Commission</div>
-          <p class="text-blue-200 text-sm mt-2">Deducted from escrow at funding completion. Applies to ALL tiers.</p>
-        </div>
-        <div class="bg-white/10 backdrop-blur rounded-2xl p-6 border border-white/10 text-center">
-          <div class="w-16 h-16 rounded-2xl bg-purple-500/20 flex items-center justify-center mx-auto mb-4"><i class="fas fa-chart-pie text-3xl text-purple-400"></i></div>
-          <div class="text-3xl font-black text-white mb-1">2.5%</div>
-          <div class="text-purple-300 font-semibold">Equity Stake</div>
-          <p class="text-blue-200 text-sm mt-2">SHERKETI receives equity in EVERY project — ALL tiers (A, B, C, D).</p>
-        </div>
-        <div class="bg-white/10 backdrop-blur rounded-2xl p-6 border border-white/10 text-center">
-          <div class="w-16 h-16 rounded-2xl bg-amber-500/20 flex items-center justify-center mx-auto mb-4"><i class="fas fa-user-shield text-3xl text-amber-400"></i></div>
-          <div class="text-3xl font-black text-white mb-1">5 Yr</div>
-          <div class="text-amber-300 font-semibold">Board Seat + Veto</div>
-          <p class="text-blue-200 text-sm mt-2">Guaranteed board seat with veto on illegal actions. Voted on renewal after 5 years.</p>
-        </div>
-      </div>
-      <div class="text-center"><p class="text-blue-200 text-sm"><i class="fas fa-info-circle mr-1"></i>All tiers: 2.5% cash + 2.5% equity + 5yr board seat. Constitutional Rule #8.</p></div>
-    </div>
-  </div>
-  <!-- How It Works -->
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 py-20">
-    <h2 class="text-3xl md:text-4xl font-bold text-center text-slate-800 mb-12">How SHERKETI Works</h2>
-    <div class="grid md:grid-cols-5 gap-4">
-      ${[{step:1,icon:'fa-id-card',title:'Verify ID',desc:'AI KYC with liveness detection',color:'blue'},{step:2,icon:'fa-robot',title:'AI Review',desc:'Feasibility scoring & valuation',color:'purple'},{step:3,icon:'fa-eye',title:'Interest Phase',desc:'14-day investor interest gauge',color:'amber'},{step:4,icon:'fa-hand-holding-dollar',title:'Invest',desc:'Funds to law-firm escrow',color:'emerald'},{step:5,icon:'fa-gavel',title:'Govern',desc:'AI-locked voting & milestones',color:'red'}].map(x=>`
-        <div class="card-hover bg-white rounded-2xl p-5 border border-slate-200 relative text-center">
-          <div class="absolute -top-3 left-1/2 -translate-x-1/2 w-7 h-7 rounded-full bg-${x.color}-500 text-white font-bold flex items-center justify-center text-xs">${x.step}</div>
-          <div class="w-12 h-12 rounded-xl bg-${x.color}-100 flex items-center justify-center mx-auto mb-3"><i class="fas ${x.icon} text-xl text-${x.color}-600"></i></div>
-          <h3 class="font-bold text-slate-800 mb-1 text-sm">${x.title}</h3>
-          <p class="text-xs text-slate-500">${x.desc}</p>
-        </div>`).join('')}
-    </div>
-  </div>
-  <!-- Constitutional Pillars -->
-  <div class="bg-slate-900 py-20">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6">
-      <h2 class="text-3xl font-bold text-center text-white mb-12"><i class="fas fa-shield-halved text-blue-400 mr-2"></i>10 Immutable Constitutional Rules</h2>
-      <div class="grid md:grid-cols-2 lg:grid-cols-5 gap-4">
-        ${[{icon:'fa-vault',title:'Zero Custody',desc:'Platform never holds funds'},{icon:'fa-building-columns',title:'Escrow Only',desc:'Licensed law-firm accounts'},{icon:'fa-lock',title:'AI-Locked',desc:'Immutable governance rules'},{icon:'fa-user-shield',title:'Human-Proof',desc:'No override capability'},{icon:'fa-link',title:'Immutable Audit',desc:'Hash-chained ledger'},{icon:'fa-fingerprint',title:'One Identity',desc:'One ID per person forever'},{icon:'fa-eye',title:'Transparency',desc:'Public constitutional rules'},{icon:'fa-scale-balanced',title:'SHERKETI Fee',desc:'2.5% cash + 2.5% equity'},{icon:'fa-chart-line',title:'Fundamental Pricing',desc:'AI intrinsic value only'},{icon:'fa-users-between-lines',title:'Partner Limitation',desc:'Founder investor cap + AI min'}].map(r=>`
-          <div class="bg-slate-800/50 rounded-xl p-5 border border-slate-700 hover:border-blue-500/50 transition-all">
-            <div class="flex items-center gap-3 mb-2"><div class="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center"><i class="fas ${r.icon} text-blue-400"></i></div><h4 class="font-bold text-white">${r.title}</h4></div>
-            <p class="text-sm text-slate-400">${r.desc}</p>
-          </div>`).join('')}
-      </div>
-    </div>
-  </div>
-  <!-- Project Tiers -->
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 py-20">
-    <h2 class="text-3xl font-bold text-center text-slate-800 mb-12">Investment Tiers</h2>
-    <div class="grid md:grid-cols-4 gap-6">
-      ${[{tier:'A',name:'Seed',desc:'New Idea, No Experience',max:'3M EGP',comm:'2.5%',eq:'2.5%',board:'5yr + Veto',icon:'fa-seedling'},{tier:'B',name:'Growth',desc:'Medium Experience',max:'25M EGP',comm:'2.5%',eq:'2.5%',board:'5yr + Veto',icon:'fa-chart-line'},{tier:'C',name:'Expert',desc:'Expert Founder',max:'Unlimited',comm:'2.5%',eq:'2.5%',board:'5yr + Veto',icon:'fa-crown'},{tier:'D',name:'Expansion',desc:'Existing Company',max:'Unlimited',comm:'2.5%',eq:'2.5%',board:'5yr + Veto',icon:'fa-building'}].map(t=>`
-        <div class="card-hover bg-white rounded-2xl overflow-hidden border border-slate-200">
-          <div class="tier-badge-${t.tier} p-4 text-center">
-            <i class="fas ${t.icon} text-3xl text-white mb-2"></i>
-            <div class="text-2xl font-black text-white">Tier ${t.tier}</div>
-            <div class="text-white/80 text-sm">${t.name}</div>
-          </div>
-          <div class="p-5">
-            <p class="text-sm text-slate-600 mb-3">${t.desc}</p>
-            <div class="space-y-2 text-sm">
-              <div class="flex justify-between"><span class="text-slate-500">Max Raise</span><span class="font-bold">${t.max}</span></div>
-              <div class="flex justify-between"><span class="text-slate-500">Commission</span><span class="font-bold text-emerald-600">${t.comm}</span></div>
-              <div class="flex justify-between"><span class="text-slate-500">Equity</span><span class="font-bold text-purple-600">${t.eq}</span></div>
-              <div class="flex justify-between"><span class="text-slate-500">Board Seat</span><span class="font-bold text-amber-600">${t.board}</span></div>
-              <div class="flex justify-between"><span class="text-slate-500">Min. Investment</span><span class="font-bold">50 EGP</span></div>
-            </div>
-          </div>
-        </div>`).join('')}
-    </div>
-  </div>
-  <footer class="bg-slate-900 text-slate-400 py-12">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6">
-      <div class="grid md:grid-cols-4 gap-8 mb-8">
-        <div><div class="flex items-center gap-2 mb-4"><div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center"><i class="fas fa-shield-halved text-white text-sm"></i></div><span class="text-lg font-bold text-white">SHERKETI</span></div><p class="text-sm">AI-governed equity crowdfunding for Egypt. 2.5% commission + 2.5% equity model.</p></div>
-        <div><h4 class="font-bold text-white mb-3">Platform</h4><ul class="space-y-2 text-sm"><li><a onclick="navigate('projects')" class="hover:text-blue-400 cursor-pointer">Explore Projects</a></li><li><a onclick="navigate('constitution')" class="hover:text-blue-400 cursor-pointer">Constitution</a></li><li><a onclick="navigate('market')" class="hover:text-blue-400 cursor-pointer">Secondary Market</a></li></ul></div>
-        <div><h4 class="font-bold text-white mb-3">Legal</h4><ul class="space-y-2 text-sm"><li>Zero Custody Architecture</li><li>Licensed Law-Firm Escrow</li><li>FRA Regulatory Compliance</li></ul></div>
-        <div><h4 class="font-bold text-white mb-3">Platform Fees</h4><ul class="space-y-2 text-sm"><li><i class="fas fa-percentage text-emerald-400 mr-1"></i>2.5% Cash Commission</li><li><i class="fas fa-chart-pie text-purple-400 mr-1"></i>2.5% Equity (ALL tiers)</li><li><i class="fas fa-user-shield text-amber-400 mr-1"></i>5yr Board + Veto</li><li><i class="fas fa-vote-yea text-blue-400 mr-1"></i>Shareholder Vote at 5yr</li></ul></div>
-      </div>
-      <div class="border-t border-slate-800 pt-6 text-center text-xs"><p>2026 SHERKETI Platform. Constitutional rules publicly auditable.</p></div>
-    </div>
-  </footer>`;
+// ---------- Sidebar ----------
+function renderSidebar() {
+  const role = currentUser?.role || 'investor';
+  const items = [
+    { icon: 'fa-th-large', label: 'Dashboard', page: 'dashboard' },
+    { icon: 'fa-folder-open', label: 'Projects', page: 'projects' },
+    { icon: 'fa-chart-line', label: 'Secondary Market', page: 'market' },
+    { icon: 'fa-gavel', label: 'Governance', page: 'governance' },
+    { icon: 'fa-scroll', label: 'Constitution', page: 'constitution' },
+    { icon: 'fa-robot', label: 'AI Tools', page: 'ai-tools' },
+    { icon: 'fa-money-bill-wave', label: 'Financial', page: 'financial' },
+    { icon: 'fa-users-cog', label: 'Board Operations', page: 'board-ops' },
+    { icon: 'fa-puzzle-piece', label: 'Add-ons', page: 'addons' },
+  ];
+  if (['admin', 'regulator'].includes(role)) {
+    items.push({ icon: 'fa-shield-alt', label: 'Admin Panel', page: 'admin' });
+  }
+  items.push({ icon: 'fa-bell', label: 'Notifications', page: 'notifications' });
+  items.push({ icon: 'fa-cog', label: 'Settings', page: 'profile' });
+
+  return `<div class="space-y-1">${items.map(i => 
+    `<div class="sidebar-item ${currentPage === i.page ? 'active' : ''}" onclick="navigate('${i.page}')">
+      <i class="fas ${i.icon} w-5 text-center"></i><span class="text-sm">${i.label}</span>
+    </div>`
+  ).join('')}</div>
+  <div class="mt-8 p-3 rounded-xl bg-primary-50 border border-primary-100">
+    <div class="text-xs font-semibold text-primary-700 mb-1"><i class="fas fa-info-circle mr-1"></i>SHERKETI Blueprint</div>
+    <div class="text-[11px] text-primary-600">v3.1 — 10 Constitutional Rules<br>Fee: 2.5% cash + 2.5% equity</div>
+  </div>`;
 }
 
-// ============ Auth ============
-function renderAuth(mode) {
-  const isLogin = mode === 'login';
-  return `${renderNav()}
-  <div class="min-h-screen flex items-center justify-center pt-16 pb-8 px-4 bg-gradient-to-br from-slate-50 to-blue-50">
-    <div class="w-full max-w-md fade-in">
-      <div class="bg-white rounded-2xl shadow-xl p-8 border border-slate-200">
-        <div class="text-center mb-8">
-          <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/25"><i class="fas fa-shield-halved text-white text-2xl"></i></div>
-          <h2 class="text-2xl font-bold text-slate-800">${isLogin ? 'Welcome Back' : 'Join SHERKETI'}</h2>
-          <p class="text-slate-500 text-sm mt-1">${isLogin ? 'Sign in to your account' : 'Create your investment account'}</p>
-        </div>
-        <form id="authForm" class="space-y-4">
-          ${!isLogin ? `
-            <div><label class="block text-sm font-medium text-slate-700 mb-1">Full Name *</label><input type="text" name="full_name" required class="w-full px-4 py-2.5 border border-slate-300 rounded-lg text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition" placeholder="Enter your full name"></div>
-            <div><label class="block text-sm font-medium text-slate-700 mb-1">Full Name (Arabic)</label><input type="text" name="full_name_ar" class="w-full px-4 py-2.5 border border-slate-300 rounded-lg text-sm ar-text" placeholder="الاسم بالعربي" dir="rtl"></div>
-          ` : ''}
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Email *</label><input type="email" name="email" required class="w-full px-4 py-2.5 border border-slate-300 rounded-lg text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition" placeholder="you@example.com"></div>
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Password *</label><input type="password" name="password" required class="w-full px-4 py-2.5 border border-slate-300 rounded-lg text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition" placeholder="Min 6 characters" minlength="6"></div>
-          ${!isLogin ? `
-            <div class="grid grid-cols-2 gap-3">
-              <div><label class="block text-sm font-medium text-slate-700 mb-1">User Type</label><select name="user_type" class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm"><option value="egyptian_individual">Egyptian Individual</option><option value="foreigner_in_egypt">Foreigner in Egypt</option><option value="foreigner_outside">Foreigner Outside</option><option value="egyptian_company">Egyptian Company</option><option value="foreign_company">Foreign Company</option></select></div>
-              <div><label class="block text-sm font-medium text-slate-700 mb-1">I want to</label><select name="role" class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm"><option value="investor">Invest</option><option value="founder">Raise Capital</option></select></div>
-            </div>
-            <div><label class="block text-sm font-medium text-slate-700 mb-1">National ID / Passport</label><input type="text" name="national_id" class="w-full px-4 py-2.5 border border-slate-300 rounded-lg text-sm" placeholder="Government-issued ID"></div>
-            <div class="grid grid-cols-2 gap-3">
-              <div><label class="block text-sm font-medium text-slate-700 mb-1">Phone</label><input type="tel" name="phone" class="w-full px-4 py-2.5 border border-slate-300 rounded-lg text-sm" placeholder="+20 1xx xxx xxxx"></div>
-              <div><label class="block text-sm font-medium text-slate-700 mb-1">Region</label><select name="region" class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm"><option value="cairo">Cairo</option><option value="alexandria">Alexandria</option><option value="delta">Delta</option><option value="upper_egypt">Upper Egypt</option></select></div>
-            </div>
-          ` : ''}
-          <div id="authError" class="text-red-600 text-sm hidden p-3 bg-red-50 rounded-lg"></div>
-          <button type="submit" class="btn-primary w-full py-3 text-base"><i class="fas ${isLogin?'fa-sign-in-alt':'fa-user-plus'} mr-2"></i>${isLogin ? 'Sign In' : 'Create Account'}</button>
-        </form>
-        <p class="text-center text-sm text-slate-500 mt-6">${isLogin?"Don't have an account?":'Already have an account?'} <a onclick="navigate('${isLogin?'register':'login'}')" class="text-blue-600 font-semibold cursor-pointer hover:underline ml-1">${isLogin?'Sign Up':'Log In'}</a></p>
-        ${isLogin ? `<div class="mt-4 p-3 bg-blue-50 rounded-lg text-xs text-blue-700"><strong>Demo Accounts:</strong><br>Admin/SHERKETI: admin@sherketi.com | Founder: ahmed@techstartup.com<br>Investor: sara@gmail.com | Manager: manager@sherketi.com<br>Accountant: accountant@audit.com | Law Firm: lawfirm@elmasry-law.com<br><em>Password for all: admin123</em></div>` : ''}
+// ---------- Page Router ----------
+function renderCurrentPage() {
+  switch (currentPage) {
+    case 'landing': return renderLanding();
+    case 'login': return renderLogin();
+    case 'register': return renderRegister();
+    case 'dashboard': return renderDashboard();
+    case 'projects': return renderProjects();
+    case 'project-detail': return renderProjectDetail();
+    case 'create-project': return renderCreateProject();
+    case 'market': return renderMarket();
+    case 'governance': return renderGovernance();
+    case 'constitution': return renderConstitution();
+    case 'ai-tools': return renderAITools();
+    case 'financial': return renderFinancial();
+    case 'board-ops': return renderBoardOps();
+    case 'addons': return renderAddons();
+    case 'admin': return renderAdmin();
+    case 'notifications': return renderNotifications();
+    case 'profile': return renderProfile();
+    default: return renderLanding();
+  }
+}
+
+// ==========================================================================
+// LANDING PAGE
+// ==========================================================================
+function renderLanding() {
+  return `<div class="hero-gradient min-h-screen">
+    <nav class="flex items-center justify-between px-6 lg:px-12 py-4">
+      <div class="flex items-center gap-2">
+        <div class="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center text-white font-bold text-lg">S</div>
+        <span class="text-white font-bold text-xl">SHERKETI</span>
       </div>
+      <div class="flex gap-3">
+        <button onclick="navigate('login')" class="btn-secondary text-sm">Log In</button>
+        <button onclick="navigate('register')" class="btn-primary text-sm">Get Started</button>
+      </div>
+    </nav>
+    <div class="max-w-5xl mx-auto px-6 pt-20 pb-32 text-center">
+      <div class="inline-block px-4 py-1.5 rounded-full bg-white/10 text-white/80 text-xs font-semibold mb-6">
+        <i class="fas fa-shield-alt mr-1"></i> Blueprint v3.1 — AI-Governed — 10 Constitutional Rules
+      </div>
+      <h1 class="text-4xl sm:text-6xl font-extrabold text-white mb-6 leading-tight">AI-Governed Equity<br>Crowdfunding for Egypt</h1>
+      <p class="text-lg text-white/70 max-w-2xl mx-auto mb-10">Invest from 50 EGP. AI feasibility scoring, constitutional governance, law-firm escrow, and full transparency — all in one platform.</p>
+      <div class="flex gap-4 justify-center flex-wrap">
+        <button onclick="navigate('register')" class="btn-primary text-base px-8 py-3">
+          <i class="fas fa-rocket mr-2"></i>Start Investing
+        </button>
+        <button onclick="navigate('projects')" class="btn-secondary text-base px-8 py-3">
+          <i class="fas fa-search mr-2"></i>Explore Projects
+        </button>
+      </div>
+      <div id="platform-stats" class="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-16 max-w-3xl mx-auto"></div>
+    </div>
+    <div class="max-w-6xl mx-auto px-6 pb-20">
+      <div class="grid md:grid-cols-3 gap-6">
+        ${[
+          { icon:'fa-brain', title:'AI Feasibility', desc:'Every project scored by AI before listing. Score < 35 = rejected.' },
+          { icon:'fa-landmark', title:'Law Firm Escrow', desc:'Funds held in regulated escrow. Dual-signature for large releases.' },
+          { icon:'fa-vote-yea', title:'Democratic Governance', desc:'Shareholders vote on everything. SHERKETI veto only for legal violations.' }
+        ].map(f => `<div class="glass rounded-2xl p-6 card-hover">
+          <div class="w-12 h-12 rounded-xl bg-primary-500/10 flex items-center justify-center mb-4">
+            <i class="fas ${f.icon} text-primary-500 text-xl"></i>
+          </div>
+          <h3 class="font-bold text-slate-800 mb-2">${f.title}</h3>
+          <p class="text-sm text-slate-500">${f.desc}</p>
+        </div>`).join('')}
+      </div>
+    </div>
+    <footer class="text-center py-8 text-white/40 text-xs">
+      SHERKETI Platform v3.3.0 — AI-Governed Equity Crowdfunding<br>
+      Fee Model: 2.5% Cash Commission + 2.5% Equity Stake + 5yr Board Seat + Veto (All Tiers)
+    </footer>
+  </div>`;
+}
+
+// ==========================================================================
+// AUTH PAGES
+// ==========================================================================
+function renderLogin() {
+  return `<div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-primary-50 p-4">
+    <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md fade-in">
+      <div class="text-center mb-8">
+        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary-500 to-accent-600 flex items-center justify-center mx-auto mb-4 text-white font-bold text-2xl">S</div>
+        <h2 class="text-2xl font-bold text-slate-800">Welcome Back</h2>
+        <p class="text-sm text-slate-500 mt-1">Sign in to SHERKETI Platform</p>
+      </div>
+      <form id="login-form" class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Email</label>
+          <input type="email" id="login-email" required class="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" placeholder="you@example.com">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Password</label>
+          <input type="password" id="login-password" required class="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" placeholder="Enter password">
+        </div>
+        <button type="submit" class="btn-primary w-full py-3 text-sm">
+          <i class="fas fa-sign-in-alt mr-2"></i>Sign In
+        </button>
+        <div id="login-error" class="text-red-500 text-sm text-center hidden"></div>
+      </form>
+      <p class="text-center text-sm text-slate-500 mt-6">
+        Don't have an account? <a href="#" onclick="navigate('register');return false" class="text-primary-600 font-semibold hover:underline">Register</a>
+      </p>
+      <p class="text-center mt-2"><a href="#" onclick="navigate('landing');return false" class="text-slate-400 text-xs hover:underline"><i class="fas fa-arrow-left mr-1"></i>Back to Home</a></p>
     </div>
   </div>`;
 }
 
-// ============ Dashboard (role-adaptive) ============
+function renderRegister() {
+  return `<div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-primary-50 p-4">
+    <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-lg fade-in">
+      <div class="text-center mb-6">
+        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary-500 to-accent-600 flex items-center justify-center mx-auto mb-4 text-white font-bold text-2xl">S</div>
+        <h2 class="text-2xl font-bold text-slate-800">Create Account</h2>
+        <p class="text-sm text-slate-500 mt-1">Join SHERKETI — Invest from 50 EGP</p>
+      </div>
+      <form id="register-form" class="space-y-4">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Full Name (EN)</label>
+            <input type="text" id="reg-name" required class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm" placeholder="John Doe">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Full Name (AR)</label>
+            <input type="text" id="reg-name-ar" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm ar-text" placeholder="الاسم الكامل">
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Email</label>
+          <input type="email" id="reg-email" required class="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" placeholder="you@example.com">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Password</label>
+          <input type="password" id="reg-password" required minlength="6" class="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" placeholder="Min 6 characters">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Role</label>
+            <select id="reg-role" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm">
+              <option value="investor">Investor</option>
+              <option value="founder">Founder</option>
+              <option value="manager">Manager</option>
+              <option value="accountant">Accountant</option>
+              <option value="law_firm">Law Firm</option>
+              <option value="regulator">Regulator</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Region</label>
+            <select id="reg-region" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm">
+              <option value="cairo">Cairo</option>
+              <option value="alexandria">Alexandria</option>
+              <option value="delta">Delta</option>
+              <option value="upper_egypt">Upper Egypt</option>
+              <option value="suez_canal">Suez Canal</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">National ID</label>
+          <input type="text" id="reg-nid" class="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" placeholder="14-digit National ID">
+        </div>
+        <button type="submit" class="btn-primary w-full py-3 text-sm">
+          <i class="fas fa-user-plus mr-2"></i>Create Account
+        </button>
+        <div id="register-error" class="text-red-500 text-sm text-center hidden"></div>
+      </form>
+      <p class="text-center text-sm text-slate-500 mt-6">
+        Already have an account? <a href="#" onclick="navigate('login');return false" class="text-primary-600 font-semibold hover:underline">Sign In</a>
+      </p>
+    </div>
+  </div>`;
+}
+
+// ==========================================================================
+// DASHBOARD (Role-Based)
+// ==========================================================================
 function renderDashboard() {
   const role = currentUser?.role || 'investor';
-  return `${renderNav()}
-  <div class="pt-20 pb-8 px-4 sm:px-6 max-w-7xl mx-auto fade-in">
-    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-3">
+  return `<div class="fade-in">
+    <div class="flex items-center justify-between mb-6">
       <div>
-        <h1 class="text-2xl font-bold text-slate-800">${roleLabel(role)} Dashboard</h1>
-        <p class="text-slate-500 text-sm">${currentUser?.verification_status === 'verified' ? '<i class="fas fa-check-circle text-emerald-500"></i> KYC Verified' : '<i class="fas fa-clock text-amber-500"></i> Pending Verification'} · ${currentUser?.full_name}</p>
+        <h1 class="text-2xl font-bold text-slate-800">Dashboard</h1>
+        <p class="text-sm text-slate-500">Welcome back, ${currentUser?.full_name || 'User'}</p>
       </div>
-      <div class="flex gap-2 flex-wrap">
-        ${['founder','admin'].includes(role) ? `<button onclick="navigate('create-project')" class="btn-primary text-sm"><i class="fas fa-plus mr-1"></i>New Project</button>` : ''}
-        <button onclick="loadDashboardData()" class="btn-secondary text-sm"><i class="fas fa-sync mr-1"></i>Refresh</button>
+      <div class="flex gap-2">
+        ${role === 'founder' ? '<button onclick="navigate(\'create-project\')" class="btn-primary text-sm"><i class="fas fa-plus mr-1"></i>New Project</button>' : ''}
+        <button onclick="loadDashboard()" class="btn-secondary text-sm"><i class="fas fa-sync-alt mr-1"></i>Refresh</button>
       </div>
     </div>
-    ${currentUser?.verification_status !== 'verified' ? `
-      <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex items-center gap-3">
-        <i class="fas fa-exclamation-triangle text-amber-500 text-xl"></i>
-        <div class="flex-1"><div class="font-semibold text-amber-800">KYC Verification Required</div><div class="text-sm text-amber-600">Complete identity verification to invest or create projects.</div></div>
-        <button onclick="autoApproveKYC()" class="btn-primary text-xs py-2">Auto-Verify (Demo)</button>
-      </div>` : ''}
-    <div id="dashboardContent"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-3xl text-blue-500 mb-3"></i></div></div>
+    <div id="dashboard-content"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-primary-500 text-2xl"></i></div></div>
   </div>`;
 }
 
-async function loadDashboardData() {
-  const c = document.getElementById('dashboardContent');
-  if (!c) return;
+async function loadDashboard() {
+  const role = currentUser?.role || 'investor';
+  const el = document.getElementById('dashboard-content');
+  if (!el) return;
+  
   try {
-    const role = currentUser?.role;
-    let ep = '/api/dashboard/investor';
-    if (role === 'founder') ep = '/api/dashboard/founder';
-    else if (role === 'admin') ep = '/api/admin/overview';
-    else if (role === 'law_firm') ep = '/api/dashboard/law-firm';
-    else if (role === 'manager') ep = '/api/dashboard/manager';
-    else if (role === 'regulator') ep = '/api/dashboard/regulator';
-    const data = await api(ep);
-    if (role === 'admin') c.innerHTML = renderAdminDash(data);
-    else if (role === 'founder') c.innerHTML = renderFounderDash(data);
-    else if (role === 'law_firm') c.innerHTML = renderLawFirmDash(data);
-    else if (role === 'manager') c.innerHTML = renderManagerDash(data);
-    else if (role === 'regulator') c.innerHTML = renderRegulatorDash(data);
-    else c.innerHTML = renderInvestorDash(data);
-  } catch (e) { c.innerHTML = `<div class="text-center py-10 text-red-500"><i class="fas fa-exclamation-circle mr-2"></i>${e.message}</div>`; }
+    let endpoint = '/api/dashboard/investor';
+    if (role === 'founder') endpoint = '/api/dashboard/founder';
+    else if (role === 'manager') endpoint = '/api/dashboard/manager';
+    else if (role === 'law_firm') endpoint = '/api/dashboard/law-firm';
+    else if (role === 'regulator') endpoint = '/api/dashboard/regulator';
+    else if (role === 'accountant') endpoint = '/api/dashboard/accountant';
+    else if (role === 'admin') endpoint = '/api/dashboard/regulator';
+
+    const data = await api(endpoint);
+    
+    if (role === 'investor') {
+      el.innerHTML = renderInvestorDash(data);
+    } else if (role === 'founder') {
+      el.innerHTML = renderFounderDash(data);
+    } else if (role === 'regulator' || role === 'admin') {
+      el.innerHTML = renderRegulatorDash(data);
+    } else {
+      el.innerHTML = renderGenericDash(data);
+    }
+  } catch (e) {
+    el.innerHTML = `<div class="bg-amber-50 border border-amber-200 rounded-xl p-6 text-center">
+      <i class="fas fa-exclamation-triangle text-amber-500 text-2xl mb-2"></i>
+      <p class="text-amber-700 text-sm">Could not load dashboard data. <button onclick="loadDashboard()" class="underline">Retry</button></p>
+    </div>`;
+  }
 }
 
 function renderInvestorDash(d) {
   const s = d.summary || {};
   return `
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">${[{l:'Total Invested',v:formatEGP(s.total_invested),i:'fa-coins',c:'blue'},{l:'Current Value',v:formatEGP(s.current_value),i:'fa-chart-line',c:'emerald'},{l:'ROI',v:s.roi||'0%',i:'fa-arrow-trend-up',c:'purple'},{l:'Projects',v:s.projects_count||0,i:'fa-folder',c:'amber'}].map(x=>`
-      <div class="bg-white rounded-xl p-4 border border-slate-200 card-hover"><div class="flex items-center gap-2 mb-2"><div class="w-8 h-8 rounded-lg bg-${x.c}-100 flex items-center justify-center"><i class="fas ${x.i} text-${x.c}-600 text-sm"></i></div><span class="text-xs text-slate-500">${x.l}</span></div><div class="text-lg font-bold text-slate-800">${x.v}</div></div>`).join('')}</div>
-    <div class="grid lg:grid-cols-3 gap-6">
-      <div class="lg:col-span-2"><div class="bg-white rounded-xl border border-slate-200 overflow-hidden"><div class="p-4 border-b border-slate-100"><h3 class="font-bold text-slate-800"><i class="fas fa-briefcase mr-2 text-blue-500"></i>My Portfolio</h3></div><div class="divide-y divide-slate-100">${(d.portfolio||[]).length===0?'<div class="p-8 text-center text-slate-400"><i class="fas fa-folder-open text-3xl mb-2"></i><p>No investments. <a onclick="navigate(\'projects\')" class="text-blue-500 cursor-pointer">Explore projects</a></p></div>':''}${(d.portfolio||[]).map(p=>`<div class="p-4 hover:bg-slate-50 cursor-pointer transition-colors" onclick="navigate('project-detail',{id:${p.project_id}})"><div class="flex items-center justify-between"><div class="flex items-center gap-3"><div class="w-10 h-10 rounded-xl tier-badge-${p.tier} flex items-center justify-center text-white font-bold">${p.tier}</div><div><div class="font-semibold text-slate-800">${p.title}</div><div class="text-xs text-slate-500"><i class="fas ${statusIcon(p.project_status)} mr-1"></i>${(p.project_status||'').replace(/_/g,' ')} · ${p.sector||''}</div></div></div><div class="text-right"><div class="font-bold text-slate-800">${formatPercent(p.equity_percentage)}</div><div class="text-xs text-slate-500">${formatEGP(p.investment_amount)}</div></div></div></div>`).join('')}</div></div></div>
-      <div class="space-y-6">
-        <div class="bg-white rounded-xl border border-slate-200 overflow-hidden"><div class="p-4 border-b border-slate-100"><h3 class="font-bold text-slate-800"><i class="fas fa-bell mr-2 text-amber-500"></i>Pending Votes (${(d.pending_votes||[]).length})</h3></div><div class="divide-y divide-slate-100 max-h-60 overflow-y-auto">${(d.pending_votes||[]).length===0?'<div class="p-4 text-center text-slate-400 text-sm">No pending votes</div>':''}${(d.pending_votes||[]).map(v=>`<div class="p-3 hover:bg-slate-50"><div class="font-medium text-sm text-slate-800">${v.title}</div><div class="text-xs text-slate-500 mt-1">${v.project_title||''} · <i class="fas fa-clock mr-1"></i>${formatDate(v.voting_deadline)}</div><div class="flex gap-2 mt-2"><button onclick="castVote(${v.id},'for')" class="text-xs px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full hover:bg-emerald-200 font-medium">Vote For</button><button onclick="castVote(${v.id},'against')" class="text-xs px-3 py-1 bg-red-100 text-red-700 rounded-full hover:bg-red-200 font-medium">Against</button></div></div>`).join('')}</div></div>
-        <div class="bg-white rounded-xl border border-slate-200 overflow-hidden"><div class="p-4 border-b border-slate-100"><h3 class="font-bold text-slate-800"><i class="fas fa-shopping-cart mr-2 text-purple-500"></i>Market Opportunities</h3></div><div class="divide-y divide-slate-100 max-h-60 overflow-y-auto">${(d.market_opportunities||[]).length===0?'<div class="p-4 text-center text-slate-400 text-sm">No active listings</div>':''}${(d.market_opportunities||[]).map(o=>`<div class="p-3 hover:bg-slate-50 cursor-pointer" onclick="navigate('market')"><div class="font-medium text-sm text-slate-800">${o.title}</div><div class="text-xs text-slate-500">${o.shares_count} shares @ ${formatEGP(o.ask_price)}/share</div></div>`).join('')}</div></div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      ${statCard('fa-wallet', 'Total Invested', fEGP(s.total_invested), 'primary')}
+      ${statCard('fa-chart-line', 'Current Value', fEGP(s.current_value), 'emerald')}
+      ${statCard('fa-percentage', 'ROI', s.roi || '0%', 'accent')}
+      ${statCard('fa-folder', 'Projects', s.projects_count || 0, 'gold')}
+    </div>
+    <div class="grid lg:grid-cols-2 gap-6">
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h3 class="font-bold text-slate-800 mb-4"><i class="fas fa-briefcase mr-2 text-primary-500"></i>Portfolio</h3>
+        ${(d.portfolio || []).length === 0 ? '<p class="text-slate-400 text-sm text-center py-8">No investments yet. <a href="#" onclick="navigate(\'projects\');return false" class="text-primary-600 underline">Browse projects</a></p>' : 
+          `<div class="space-y-3">${(d.portfolio || []).map(p => `
+            <div class="flex items-center justify-between p-3 rounded-xl hover:bg-slate-50 cursor-pointer" onclick="navigate('project-detail',{id:${p.project_id}})">
+              <div>
+                <div class="font-semibold text-sm text-slate-800">${p.title || 'Project #' + p.project_id}</div>
+                <div class="text-xs text-slate-500">${tierBadge(p.tier || 'A')} ${fPct(p.equity_percentage)} equity</div>
+              </div>
+              <div class="text-right">
+                <div class="font-semibold text-sm text-emerald-600">${fEGP(p.investment_amount)}</div>
+                <div class="text-xs text-slate-400">${p.project_status || 'active'}</div>
+              </div>
+            </div>`).join('')}</div>`}
       </div>
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h3 class="font-bold text-slate-800 mb-4"><i class="fas fa-vote-yea mr-2 text-accent-500"></i>Pending Votes</h3>
+        ${(d.pending_votes || []).length === 0 ? '<p class="text-slate-400 text-sm text-center py-8">No pending votes</p>' :
+          `<div class="space-y-3">${(d.pending_votes || []).map(v => `
+            <div class="p-3 rounded-xl border border-slate-100 hover:border-primary-200">
+              <div class="font-semibold text-sm text-slate-800">${v.title}</div>
+              <div class="text-xs text-slate-500">${v.project_title || ''} — ${v.vote_type}</div>
+              <div class="text-xs text-amber-600 mt-1"><i class="fas fa-clock mr-1"></i>Deadline: ${fTime(v.voting_deadline)}</div>
+            </div>`).join('')}</div>`}
+      </div>
+    </div>
+    <div class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
+      <h3 class="font-bold text-slate-800 mb-4"><i class="fas fa-store mr-2 text-purple-500"></i>Market Opportunities</h3>
+      ${(d.market_opportunities || []).length === 0 ? '<p class="text-slate-400 text-sm text-center py-4">No market opportunities</p>' :
+        `<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">${(d.market_opportunities || []).map(o => `
+          <div class="p-3 rounded-xl border border-slate-100 hover:border-primary-200 card-hover">
+            <div class="font-semibold text-sm">${o.title || 'Project'}</div>
+            <div class="text-xs text-slate-500">${o.shares_count} shares at ${fEGP(o.ask_price)}/share</div>
+          </div>`).join('')}</div>`}
     </div>`;
 }
 
 function renderFounderDash(d) {
   return `
-    <div class="grid lg:grid-cols-3 gap-6">
-      <div class="lg:col-span-2 space-y-6">
-        <div class="bg-white rounded-xl border border-slate-200"><div class="p-4 border-b border-slate-100"><h3 class="font-bold text-slate-800"><i class="fas fa-rocket mr-2 text-blue-500"></i>My Projects</h3></div>
-          ${(d.projects||[]).length===0?'<div class="p-8 text-center text-slate-400"><i class="fas fa-plus-circle text-3xl mb-2"></i><p><a onclick="navigate(\'create-project\')" class="text-blue-500 cursor-pointer">Create your first project</a></p></div>':''}
-          ${(d.projects||[]).map(p=>`<div class="p-4 border-b border-slate-100 hover:bg-slate-50 cursor-pointer" onclick="navigate('project-detail',{id:${p.id}})">
-            <div class="flex items-center justify-between mb-3"><div class="flex items-center gap-3"><div class="w-12 h-12 rounded-xl tier-badge-${p.tier} flex items-center justify-center text-white font-bold text-lg">${p.tier}</div><div><div class="font-bold text-slate-800">${p.title}</div><div class="text-xs text-slate-500">${p.sector} · <i class="fas ${statusIcon(p.status)}"></i> ${(p.status||'').replace(/_/g,' ')}</div></div></div>
-              <div class="text-right text-sm"><div class="font-bold">${formatEGP(p.funding_raised)} <span class="text-slate-400">/ ${formatEGP(p.funding_goal)}</span></div>
-              <div class="text-xs"><span class="text-emerald-600">Comm: ${p.jozour_commission_percent}%</span> <span class="text-purple-600 ml-1">Eq: ${p.jozour_equity_percent}%</span> ${p.jozour_veto_active?'<span class="text-amber-600 ml-1">Veto</span>':''}</div></div></div>
-            <div class="w-full bg-slate-200 rounded-full h-2"><div class="bg-gradient-to-r from-blue-500 to-purple-500 h-2 rounded-full progress-bar" style="width:${Math.min(100,(p.funding_raised/p.funding_goal*100))}%"></div></div>
-            <div class="flex justify-between mt-2 text-xs text-slate-500"><span>${Math.round(p.funding_raised/p.funding_goal*100)}% funded</span><span>${p.investor_count||0} investors</span><span>AI: ${p.ai_feasibility_score||'-'}/100</span></div>
-          </div>`).join('')}</div>
-        <div class="bg-white rounded-xl border border-slate-200"><div class="p-4 border-b border-slate-100"><h3 class="font-bold text-slate-800"><i class="fas fa-flag-checkered mr-2 text-emerald-500"></i>Milestones</h3></div><div class="p-4 space-y-3">${(d.milestones||[]).map(m=>`<div class="flex items-center gap-3"><div class="w-8 h-8 rounded-full ${m.status==='completed'?'bg-emerald-100 text-emerald-600':m.status==='in_progress'?'bg-blue-100 text-blue-600':'bg-slate-100 text-slate-400'} flex items-center justify-center"><i class="fas ${m.status==='completed'?'fa-check':m.status==='in_progress'?'fa-spinner fa-spin':'fa-clock'} text-sm"></i></div><div class="flex-1"><div class="text-sm font-medium text-slate-800">${m.title}</div><div class="text-xs text-slate-500">${m.project_title||''} · ${formatEGP(m.tranche_amount)}</div></div><span class="text-xs px-2 py-1 rounded-full ${m.status==='completed'?'bg-emerald-100 text-emerald-700':m.status==='in_progress'?'bg-blue-100 text-blue-700':'bg-slate-100 text-slate-500'}">${(m.status||'').replace(/_/g,' ')}</span></div>`).join('')}</div></div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      ${statCard('fa-folder', 'Projects', (d.projects || []).length, 'primary')}
+      ${statCard('fa-users', 'Total Investors', (d.projects || []).reduce((a,p) => a + (p.investor_count || 0), 0), 'emerald')}
+      ${statCard('fa-exclamation-triangle', 'Active Alerts', (d.projects || []).reduce((a,p) => a + (p.active_alerts || 0), 0), 'red')}
+      ${statCard('fa-vote-yea', 'Open Votes', (d.projects || []).reduce((a,p) => a + (p.open_votes || 0), 0), 'amber')}
+    </div>
+    <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+      <h3 class="font-bold text-slate-800 mb-4"><i class="fas fa-project-diagram mr-2 text-primary-500"></i>My Projects</h3>
+      <div class="space-y-3">
+        ${(d.projects || []).map(p => `
+          <div class="flex items-center justify-between p-4 rounded-xl border border-slate-100 hover:border-primary-200 cursor-pointer card-hover" onclick="navigate('project-detail',{id:${p.id}})">
+            <div class="flex items-center gap-3">
+              ${statusDot(p.status)}
+              <div>
+                <div class="font-semibold text-sm">${p.title}</div>
+                <div class="text-xs text-slate-500">${tierBadge(p.tier)} ${p.sector || ''} — ${p.status}</div>
+              </div>
+            </div>
+            <div class="text-right">
+              <div class="font-semibold text-sm">${fEGP(p.funding_raised)} / ${fEGP(p.funding_goal)}</div>
+              <div class="w-32 h-2 bg-slate-100 rounded-full mt-1"><div class="h-2 bg-primary-500 rounded-full progress-bar" style="width:${Math.min(100, (p.funding_raised || 0) / (p.funding_goal || 1) * 100)}%"></div></div>
+            </div>
+          </div>`).join('')}
       </div>
-      <div class="space-y-6">
-        <div class="bg-white rounded-xl border border-slate-200 p-4"><h3 class="font-bold text-slate-800 mb-3"><i class="fas fa-vault mr-2 text-emerald-500"></i>Escrow Overview</h3>${(d.escrow_overview||[]).map(e=>`<div class="mb-3 p-3 bg-slate-50 rounded-lg"><div class="text-sm font-medium text-slate-800">${e.title} <span class="text-xs px-2 py-0.5 tier-badge-${e.tier} text-white rounded ml-1">Tier ${e.tier}</span></div><div class="grid grid-cols-2 gap-2 mt-2 text-xs"><div><span class="text-slate-500">Deposited</span><br><span class="font-bold text-emerald-600">${formatEGP(e.total_deposits)}</span></div><div><span class="text-slate-500">Released</span><br><span class="font-bold text-blue-600">${formatEGP(e.total_released)}</span></div></div><div class="text-xs mt-1 text-purple-600"><i class="fas fa-hand-holding-dollar mr-1"></i>SHERKETI Commission: ${formatEGP(e.jozour_commission_paid)}</div></div>`).join('')}</div>
-        <div class="bg-white rounded-xl border border-slate-200 p-4"><h3 class="font-bold text-slate-800 mb-3"><i class="fas fa-user-tie mr-2 text-amber-500"></i>Board Members</h3><div class="space-y-2">${(d.board_members||[]).map(b=>`<div class="flex items-center gap-2 p-2 rounded-lg ${b.role==='jozour_observer'?'bg-amber-50 border border-amber-200':'hover:bg-slate-50'}"><div class="w-7 h-7 rounded-full ${b.role==='jozour_observer'?'bg-amber-500':'bg-blue-500'} flex items-center justify-center text-white text-xs"><i class="fas ${b.role==='jozour_observer'?'fa-shield':'fa-user'}"></i></div><div class="flex-1"><div class="text-sm font-medium">${b.full_name}</div><div class="text-xs text-slate-500">${boardRoleLabel(b.role)} · ${b.project_title||''}</div></div>${b.has_veto?'<span class="text-xs px-2 py-0.5 bg-red-100 text-red-600 rounded-full">Veto</span>':''}</div>`).join('')}</div></div>
-        <div class="bg-white rounded-xl border border-slate-200 p-4"><h3 class="font-bold text-slate-800 mb-3"><i class="fas fa-gavel mr-2 text-red-500"></i>Open Votes</h3>${(d.pending_votes||[]).length===0?'<p class="text-sm text-slate-400 text-center">No open votes</p>':''}${(d.pending_votes||[]).map(v=>`<div class="p-2 bg-blue-50 rounded-lg mb-2"><div class="text-sm font-medium">${v.title}</div><div class="text-xs text-slate-500">${v.project_title} · ${formatDate(v.voting_deadline)}</div></div>`).join('')}</div>
+    </div>
+    <div class="grid lg:grid-cols-2 gap-6">
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h3 class="font-bold text-slate-800 mb-4"><i class="fas fa-flag-checkered mr-2 text-emerald-500"></i>Milestones</h3>
+        ${(d.milestones || []).slice(0, 8).map(m => `
+          <div class="flex items-center gap-3 p-2 text-sm">
+            <i class="fas ${m.status === 'completed' ? 'fa-check-circle text-emerald-500' : m.status === 'overdue' ? 'fa-exclamation-circle text-red-500' : 'fa-circle text-slate-300'} text-sm"></i>
+            <span class="flex-1">${m.title}</span>
+            <span class="text-xs text-slate-400">${m.project_title || ''}</span>
+          </div>`).join('')}
+      </div>
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h3 class="font-bold text-slate-800 mb-4"><i class="fas fa-piggy-bank mr-2 text-amber-500"></i>Escrow Overview</h3>
+        ${(d.escrow_overview || []).map(e => `
+          <div class="p-3 rounded-lg bg-slate-50 mb-2">
+            <div class="font-semibold text-sm">${e.title}</div>
+            <div class="grid grid-cols-3 gap-2 text-xs mt-1">
+              <div>Deposits: ${fEGP(e.total_deposits)}</div>
+              <div>Released: ${fEGP(e.total_released)}</div>
+              <div>Commission: ${fEGP(e.jozour_commission_paid)}</div>
+            </div>
+          </div>`).join('')}
       </div>
     </div>`;
-}
-
-function renderManagerDash(d) {
-  return `<div class="grid lg:grid-cols-2 gap-6">
-    <div class="bg-white rounded-xl border border-slate-200"><div class="p-4 border-b border-slate-100"><h3 class="font-bold"><i class="fas fa-briefcase mr-2 text-blue-500"></i>Managed Projects</h3></div>${(d.managed_projects||[]).map(p=>`<div class="p-4 border-b border-slate-100 hover:bg-slate-50 cursor-pointer" onclick="navigate('project-detail',{id:${p.id}})"><div class="flex items-center justify-between"><div><div class="font-bold">${p.title}</div><div class="text-xs text-slate-500">${(p.status||'').replace(/_/g,' ')} · ${p.investor_count||0} investors</div></div><div class="text-right"><div class="font-bold">${formatEGP(p.funding_raised)}</div>${p.active_alerts>0?`<span class="text-xs text-red-500"><i class="fas fa-exclamation-triangle"></i> ${p.active_alerts}</span>`:''}</div></div></div>`).join('')}</div>
-    <div class="space-y-6">
-      <div class="bg-white rounded-xl border border-slate-200"><div class="p-4 border-b border-slate-100"><h3 class="font-bold"><i class="fas fa-clock mr-2 text-amber-500"></i>Pending Transactions</h3></div>${(d.pending_transactions||[]).length===0?'<div class="p-4 text-sm text-slate-400 text-center">No pending transactions</div>':''}${(d.pending_transactions||[]).map(t=>`<div class="p-3 border-b border-slate-100"><div class="flex justify-between"><span class="font-medium text-sm">${t.title}</span><span class="font-bold text-sm">${formatEGP(t.amount)}</span></div><div class="text-xs text-slate-500 capitalize mt-1">${t.transaction_type} · ${t.status}</div></div>`).join('')}</div>
-      <div class="bg-white rounded-xl border border-slate-200"><div class="p-4 border-b border-slate-100"><h3 class="font-bold"><i class="fas fa-money-bill mr-2 text-emerald-500"></i>Salary Records</h3></div>${(d.salary_records||[]).map(s=>`<div class="p-3 border-b border-slate-100"><div class="flex justify-between"><div><span class="font-medium text-sm">${s.full_name}</span><br><span class="text-xs text-slate-500">${s.project_title} · ${s.period}</span></div><span class="font-bold">${formatEGP(s.calculated_salary)}</span></div></div>`).join('')}</div>
-    </div>
-  </div>`;
-}
-
-function renderLawFirmDash(d) {
-  return `<div class="grid lg:grid-cols-2 gap-6">
-    <div class="space-y-6">
-      <div class="bg-white rounded-xl border border-slate-200"><div class="p-4 border-b border-slate-100"><h3 class="font-bold"><i class="fas fa-building-columns mr-2 text-blue-500"></i>Assigned Projects (${(d.assigned_projects||[]).length})</h3></div>${(d.assigned_projects||[]).map(p=>`<div class="p-4 border-b border-slate-100"><div class="flex justify-between"><div><div class="font-bold">${p.title}</div><div class="text-xs text-slate-500">Founder: ${p.founder_name} · ${(p.status||'').replace(/_/g,' ')}</div></div><div class="text-right text-sm font-bold">${formatEGP(p.total_escrow_volume||0)}</div></div></div>`).join('')}</div>
-      <div class="bg-amber-50 border border-amber-200 rounded-xl p-4"><h3 class="font-bold text-amber-800 mb-2"><i class="fas fa-stamp mr-2"></i>Pending Notarizations (${(d.pending_notarizations||[]).length})</h3>${(d.pending_notarizations||[]).map(n=>`<div class="p-2 bg-white rounded-lg mb-2"><div class="font-medium text-sm">${n.title}</div><div class="text-xs text-slate-500">${n.title} · Vote passed</div><button onclick="showToast('Notarization simulated','success')" class="text-xs btn-primary mt-1 py-1">Notarize</button></div>`).join('')}${(d.pending_notarizations||[]).length===0?'<p class="text-sm text-amber-600">No pending notarizations</p>':''}</div>
-    </div>
-    <div class="bg-white rounded-xl border border-slate-200"><div class="p-4 border-b border-slate-100"><h3 class="font-bold"><i class="fas fa-money-bill-transfer mr-2 text-emerald-500"></i>Escrow Transactions</h3></div><div class="max-h-[500px] overflow-y-auto">${(d.escrow_transactions||[]).map(t=>`<div class="p-3 border-b border-slate-100"><div class="flex justify-between"><div><span class="font-medium text-sm capitalize">${t.transaction_type}</span> · <span class="text-slate-500 text-sm">${t.title}</span></div><span class="font-bold text-sm ${t.transaction_type==='deposit'?'text-emerald-600':'text-blue-600'}">${t.transaction_type==='deposit'?'+':''}${formatEGP(t.amount)}</span></div><div class="text-xs text-slate-400 mt-1">${t.status} · ${t.law_firm_stamp||''}</div></div>`).join('')}</div></div>
-  </div>`;
 }
 
 function renderRegulatorDash(d) {
-  return `<div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6"><div class="flex items-center gap-2"><i class="fas fa-eye text-amber-500"></i><span class="font-bold text-amber-800">FRA Regulatory Shadow Mode</span></div><p class="text-sm text-amber-600 mt-1">${d.disclaimer}</p></div>
-    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-      <div class="bg-white rounded-xl border p-4"><h3 class="font-bold mb-3"><i class="fas fa-building mr-2 text-blue-500"></i>Projects</h3>${(d.project_statistics||[]).map(p=>`<div class="flex justify-between text-sm py-1"><span>Tier ${p.tier} · ${(p.status||'').replace(/_/g,' ')}</span><span class="font-bold">${p.count} (${formatEGP(p.total_raised||0)})</span></div>`).join('')}</div>
-      <div class="bg-white rounded-xl border p-4"><h3 class="font-bold mb-3"><i class="fas fa-vault mr-2 text-emerald-500"></i>Escrow</h3>${(d.escrow_balance||[]).map(e=>`<div class="flex justify-between text-sm py-1"><span class="capitalize">${e.transaction_type}</span><span class="font-bold">${formatEGP(e.total)}</span></div>`).join('')}</div>
-      <div class="bg-white rounded-xl border p-4"><h3 class="font-bold mb-3"><i class="fas fa-hand-holding-dollar mr-2 text-purple-500"></i>Platform Fees</h3>${(d.jozour_overview||[]).map(j=>`<div class="flex justify-between text-sm py-1"><span>Tier ${j.tier} (${j.projects} projects)</span><span class="font-bold">${formatEGP(j.total_commission||0)}</span></div>`).join('')}</div>
-      <div class="bg-white rounded-xl border p-4"><h3 class="font-bold mb-3"><i class="fas fa-gavel mr-2 text-amber-500"></i>Governance</h3>${(d.governance_events||[]).map(e=>`<div class="flex justify-between text-sm py-1"><span>${(e.event_type||'').replace(/_/g,' ')}</span><span class="font-bold">${e.count}</span></div>`).join('')}</div>
-      <div class="bg-white rounded-xl border p-4"><h3 class="font-bold mb-3"><i class="fas fa-exclamation-triangle mr-2 text-red-500"></i>Risk Alerts</h3>${(d.active_risks||[]).length===0?'<p class="text-sm text-slate-400">No active risks</p>':''}${(d.active_risks||[]).map(r=>`<div class="flex justify-between text-sm py-1"><span class="${r.alert_level==='red'?'text-red-600':'text-amber-600'}">${r.alert_level.toUpperCase()} · ${r.risk_category}</span><span class="font-bold">${r.count}</span></div>`).join('')}</div>
-      <div class="bg-white rounded-xl border p-4"><h3 class="font-bold mb-3"><i class="fas fa-balance-scale mr-2 text-purple-500"></i>Disputes</h3>${(d.dispute_summary||[]).length===0?'<p class="text-sm text-slate-400">No disputes</p>':''}${(d.dispute_summary||[]).map(ds=>`<div class="flex justify-between text-sm py-1"><span class="capitalize">${(ds.status||'').replace(/_/g,' ')}</span><span class="font-bold">${ds.count}</span></div>`).join('')}</div>
+  return `
+    <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex items-center gap-3">
+      <i class="fas fa-eye text-amber-500"></i>
+      <div class="text-sm text-amber-700 font-medium">FRA Shadow Mode — Read-only aggregated data. No PII exposed.</div>
+    </div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      ${statCard('fa-folder', 'Total Projects', (d.project_statistics || []).reduce((a,p) => a + (p.count || 0), 0), 'primary')}
+      ${statCard('fa-balance-scale', 'Escrow Types', (d.escrow_balance || []).length, 'emerald')}
+      ${statCard('fa-exclamation-circle', 'Active Risks', (d.active_risks || []).reduce((a,r) => a + (r.count || 0), 0), 'red')}
+      ${statCard('fa-gavel', 'Disputes', (d.dispute_summary || []).reduce((a,r) => a + (r.count || 0), 0), 'amber')}
+    </div>
+    <div class="grid lg:grid-cols-2 gap-6">
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h3 class="font-bold text-slate-800 mb-4"><i class="fas fa-chart-bar mr-2 text-primary-500"></i>Project Statistics</h3>
+        <div class="overflow-x-auto"><table class="w-full text-sm">
+          <thead><tr class="text-left text-xs text-slate-500 border-b"><th class="pb-2">Tier</th><th>Status</th><th>Count</th><th>Goal</th><th>Raised</th></tr></thead>
+          <tbody>${(d.project_statistics || []).map(p => `<tr class="border-b border-slate-50"><td class="py-2">${tierBadge(p.tier || '?')}</td><td>${p.status}</td><td>${p.count}</td><td>${fEGP(p.total_goal)}</td><td>${fEGP(p.total_raised)}</td></tr>`).join('')}</tbody>
+        </table></div>
+      </div>
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h3 class="font-bold text-slate-800 mb-4"><i class="fas fa-landmark mr-2 text-emerald-500"></i>SHERKETI Overview</h3>
+        <div class="space-y-2">${(d.jozour_overview || []).map(j => `
+          <div class="flex justify-between p-2 bg-slate-50 rounded-lg text-sm">
+            <span>${tierBadge(j.tier)} ${j.projects} projects</span>
+            <span class="text-emerald-600 font-semibold">${fEGP(j.total_commission)} commission</span>
+          </div>`).join('')}</div>
+      </div>
     </div>`;
 }
 
-function renderAdminDash(d) {
-  return `<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">${[{l:'Users',v:(d.users||[]).reduce((s,u)=>s+u.count,0),i:'fa-users',c:'blue'},{l:'Projects',v:(d.projects||[]).reduce((s,p)=>s+p.count,0),i:'fa-rocket',c:'purple'},{l:'Escrow Volume',v:formatEGP((d.escrow||[]).reduce((s,e)=>s+e.total,0)),i:'fa-vault',c:'emerald'},{l:'Active Alerts',v:(d.active_alerts||[]).reduce((s,a)=>s+a.count,0),i:'fa-exclamation-triangle',c:'red'}].map(x=>`<div class="bg-white rounded-xl p-4 border card-hover"><div class="w-8 h-8 rounded-lg bg-${x.c}-100 flex items-center justify-center mb-2"><i class="fas ${x.i} text-${x.c}-600"></i></div><div class="text-lg font-bold">${x.v}</div><div class="text-xs text-slate-500">${x.l}</div></div>`).join('')}</div>
-    <div class="grid md:grid-cols-2 gap-6">
-      <div class="bg-white rounded-xl border p-4"><h3 class="font-bold mb-3">Users by Role</h3>${(d.users||[]).map(u=>`<div class="flex justify-between text-sm py-1"><span class="capitalize">${u.role} (${u.verification_status})</span><span class="font-bold">${u.count}</span></div>`).join('')}</div>
-      <div class="bg-white rounded-xl border p-4"><h3 class="font-bold mb-3">Projects by Tier</h3>${(d.projects||[]).map(p=>`<div class="flex justify-between text-sm py-1"><span>Tier ${p.tier} · ${(p.status||'').replace(/_/g,' ')}</span><span class="font-bold">${p.count} (${formatEGP(p.total_raised||0)})</span></div>`).join('')}</div>
-    </div>`;
+function renderGenericDash(d) {
+  return `<div class="bg-white rounded-2xl border border-slate-200 p-6">
+    <h3 class="font-bold text-slate-800 mb-4"><i class="fas fa-th-large mr-2"></i>Dashboard Data</h3>
+    <pre class="text-xs bg-slate-50 p-4 rounded-lg overflow-x-auto">${JSON.stringify(d, null, 2)}</pre>
+  </div>`;
 }
 
-// ============ Projects List / Detail / Create / Constitution / Market / AI / Admin / Notifications ============
-// (These sections remain similar to v1 with SHERKETI fee updates throughout)
-
-function renderProjectsList() {
-  return `${renderNav()}<div class="pt-20 pb-8 px-4 sm:px-6 max-w-7xl mx-auto fade-in">
-    <div class="flex items-center justify-between mb-6"><div><h1 class="text-2xl font-bold text-slate-800"><i class="fas fa-rocket mr-2 text-blue-500"></i>Explore Projects</h1><p class="text-slate-500 text-sm">AI-verified investment opportunities</p></div>
-    ${currentUser?.role==='founder'||currentUser?.role==='admin'?`<button onclick="navigate('create-project')" class="btn-primary text-sm"><i class="fas fa-plus mr-1"></i>New Project</button>`:''}</div>
-    <div class="flex flex-wrap gap-2 mb-6">${['All','live_fundraising','interest_phase','active','funded'].map((f,i)=>`<button onclick="filterProjects(${i===0?'':'\''+f+'\''})" class="px-4 py-2 ${i===0?'bg-blue-600 text-white':'bg-white border border-slate-200 hover:border-blue-500'} rounded-lg text-sm font-medium">${i===0?'All':(f||'').replace(/_/g,' ')}</button>`).join('')}</div>
-    <div id="projectsGrid"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-3xl text-blue-500"></i></div></div></div>`;
+function statCard(icon, label, value, color = 'primary') {
+  const colors = { primary:'from-primary-500 to-primary-600', emerald:'from-emerald-500 to-emerald-600', accent:'from-accent-500 to-accent-600', gold:'from-amber-400 to-amber-500', red:'from-red-500 to-red-600', amber:'from-amber-500 to-amber-600', blue:'from-blue-500 to-blue-600' };
+  return `<div class="bg-white rounded-2xl border border-slate-200 p-4 card-hover">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-br ${colors[color] || colors.primary} flex items-center justify-center text-white"><i class="fas ${icon}"></i></div>
+      <div><div class="text-xs text-slate-500">${label}</div><div class="text-lg font-bold text-slate-800">${value}</div></div>
+    </div>
+  </div>`;
 }
 
-async function filterProjects(status) {
-  const c = document.getElementById('projectsGrid'); if (!c) return;
-  try {
-    const data = await api(`/api/projects${status?'?status='+status:''}`);
-    const ps = data.projects || [];
-    if (!ps.length) { c.innerHTML = '<div class="text-center py-16 text-slate-400"><i class="fas fa-search text-4xl mb-3"></i><p>No projects found</p></div>'; return; }
-    c.innerHTML = `<div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">${ps.map(p=>`<div class="card-hover bg-white rounded-2xl border border-slate-200 overflow-hidden cursor-pointer" onclick="navigate('project-detail',{id:${p.id}})">
-      <div class="tier-badge-${p.tier} p-4 flex items-center justify-between"><div><span class="text-white/80 text-xs font-medium">TIER ${p.tier}</span><h3 class="text-lg font-bold text-white">${p.title}</h3></div><div class="text-right"><div class="text-white font-bold text-lg">${p.ai_feasibility_score||'--'}</div><div class="text-white/70 text-xs">AI Score</div></div></div>
-      <div class="p-4"><p class="text-sm text-slate-600 line-clamp-2 mb-3">${(p.description||'').substring(0,120)}...</p>
-        <div class="flex flex-wrap gap-2 mb-3"><span class="px-2 py-1 bg-slate-100 rounded-full text-xs">${p.sector}</span><span class="px-2 py-1 bg-slate-100 rounded-full text-xs"><i class="fas ${statusIcon(p.status)} mr-1"></i>${(p.status||'').replace(/_/g,' ')}</span></div>
-        <div class="mb-3"><div class="flex justify-between text-xs mb-1"><span class="text-slate-500">${formatEGP(p.funding_raised)}</span><span class="font-bold">${Math.round((p.funding_raised||0)/(p.funding_goal||1)*100)}%</span></div><div class="w-full bg-slate-200 rounded-full h-2"><div class="bg-gradient-to-r from-blue-500 to-purple-500 h-2 rounded-full progress-bar" style="width:${Math.min(100,(p.funding_raised||0)/(p.funding_goal||1)*100)}%"></div></div><div class="text-xs text-slate-400 mt-1">Goal: ${formatEGP(p.funding_goal)}</div></div>
-        <div class="flex items-center justify-between text-xs text-slate-500"><span><i class="fas fa-user mr-1"></i>${p.founder_name||''}</span><span>Min ${formatEGP(p.min_investment)}</span></div>
-      </div></div>`).join('')}</div>`;
-  } catch (e) { c.innerHTML = `<div class="text-center py-10 text-red-500">${e.message}</div>`; }
-}
-
-function renderProjectDetail() {
-  return `${renderNav()}<div class="pt-20 pb-8 px-4 sm:px-6 max-w-7xl mx-auto fade-in"><div id="projectDetailContent"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-3xl text-blue-500"></i></div></div></div>`;
-}
-
-async function loadProjectDetail() {
-  const c = document.getElementById('projectDetailContent'); if (!c) return;
-  const params = getState('params'); if (!params?.id) { c.innerHTML = '<p class="text-center py-10 text-red-500">No project ID</p>'; return; }
-  try {
-    const data = await api(`/api/projects/${params.id}`);
-    const p = data.project;
-    const prog = Math.min(100, (p.funding_raised||0)/(p.funding_goal||1)*100);
-    c.innerHTML = `
-      <button onclick="navigate('projects')" class="text-sm text-slate-500 hover:text-blue-600 mb-4 inline-block"><i class="fas fa-arrow-left mr-1"></i>Back</button>
-      <div class="grid lg:grid-cols-3 gap-6">
-        <div class="lg:col-span-2 space-y-6">
-          <div class="bg-white rounded-2xl border overflow-hidden"><div class="tier-badge-${p.tier} p-6"><div class="flex items-center justify-between"><div><div class="flex items-center gap-2 mb-2"><span class="px-3 py-1 bg-white/20 rounded-full text-white text-sm">Tier ${p.tier}</span><span class="px-3 py-1 bg-white/20 rounded-full text-white text-sm"><i class="fas ${statusIcon(p.status)} mr-1"></i>${(p.status||'').replace(/_/g,' ')}</span></div><h1 class="text-3xl font-bold text-white">${p.title}</h1>${p.title_ar?`<p class="ar-text text-white/80 font-cairo">${p.title_ar}</p>`:''}</div><div class="text-right"><div class="text-4xl font-black text-white">${p.ai_feasibility_score||'--'}</div><div class="text-white/70 text-sm">AI Score</div></div></div></div>
-            <div class="p-6"><p class="text-slate-600 leading-relaxed mb-4">${p.description}</p>
-              <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">${[{l:'Sector',v:p.sector},{l:'Founder',v:p.founder_name},{l:'Region',v:p.company_region},{l:'Health',v:(p.health_score||0)+'/100'}].map(x=>`<div class="p-3 bg-slate-50 rounded-lg"><span class="text-slate-500 text-xs block">${x.l}</span><span class="font-bold capitalize">${x.v}</span></div>`).join('')}</div></div></div>
-          <!-- SHERKETI Fee Info -->
-          <div class="bg-gradient-to-r from-blue-50 to-purple-50 rounded-2xl border border-blue-200 p-5">
-            <h3 class="font-bold text-slate-800 mb-3"><i class="fas fa-hand-holding-dollar mr-2 text-purple-500"></i>SHERKETI Fee Structure (Tier ${p.tier})</h3>
-            <div class="grid grid-cols-3 gap-4 text-center">
-              <div><div class="text-2xl font-black text-emerald-600">${p.jozour_commission_percent||2.5}%</div><div class="text-xs text-slate-500">Cash Commission</div><div class="text-xs text-slate-400">${formatEGP((p.funding_goal||0)*((p.jozour_commission_percent||2.5)/100))}</div></div>
-              <div><div class="text-2xl font-black text-purple-600">${p.jozour_equity_percent||0}%</div><div class="text-xs text-slate-500">Equity Stake</div></div>
-              <div><div class="text-2xl font-black text-amber-600">${p.jozour_veto_active?'Active':'None'}</div><div class="text-xs text-slate-500">Veto Power</div>${p.jozour_board_term_end?`<div class="text-xs text-slate-400">Until ${formatDate(p.jozour_board_term_end)}</div>`:''}</div>
-            </div>
-          </div>
-          <!-- Funding -->
-          <div class="bg-white rounded-2xl border p-6"><h3 class="font-bold text-slate-800 mb-4"><i class="fas fa-chart-pie mr-2 text-blue-500"></i>Funding Progress</h3>
-            <div class="flex justify-between mb-2"><span class="text-2xl font-bold">${formatEGP(p.funding_raised)}</span><span class="text-slate-500">of ${formatEGP(p.funding_goal)}</span></div>
-            <div class="w-full bg-slate-200 rounded-full h-4 mb-4"><div class="bg-gradient-to-r from-blue-500 to-purple-500 h-4 rounded-full progress-bar flex items-center justify-end pr-2" style="width:${prog}%">${prog>15?`<span class="text-white text-xs font-bold">${Math.round(prog)}%</span>`:''}</div></div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm"><div><span class="text-slate-500">Pre-Money</span><br><span class="font-bold">${formatEGP(p.pre_money_valuation)}</span></div><div><span class="text-slate-500">Post-Money</span><br><span class="font-bold">${formatEGP(p.post_money_valuation)}</span></div><div><span class="text-slate-500">Min. Investment</span><br><span class="font-bold">${formatEGP(p.min_investment)}</span></div><div><span class="text-slate-500">Equity Offered</span><br><span class="font-bold">${p.equity_offered}%</span></div></div>
-            ${p.status==='live_fundraising'&&currentUser?`<div class="mt-4 p-4 bg-blue-50 rounded-xl border border-blue-200"><h4 class="font-bold text-blue-800 mb-2"><i class="fas fa-hand-holding-dollar mr-1"></i>Invest Now</h4><div class="flex gap-3"><input type="number" id="investAmount" min="${p.min_investment}" placeholder="Amount (EGP)" class="flex-1 px-4 py-2 border border-blue-300 rounded-lg"><button onclick="investInProject(${p.id})" class="btn-primary">Invest</button></div><p class="text-xs text-blue-600 mt-2"><i class="fas fa-shield mr-1"></i>Funds go to law-firm escrow. SHERKETI never touches your money.</p></div>`:''}
-            ${p.status==='interest_phase'&&currentUser?`<div class="mt-4 p-4 bg-amber-50 rounded-xl border border-amber-200"><h4 class="font-bold text-amber-800 mb-2"><i class="fas fa-eye mr-1"></i>Interest Phase (${p.interest_votes} votes, ${formatEGP(p.soft_pledges)} pledged)</h4><div class="flex gap-3"><input type="number" id="pledgeAmount" placeholder="Soft pledge (EGP)" class="flex-1 px-4 py-2 border border-amber-300 rounded-lg"><button onclick="expressInterest(${p.id})" class="px-4 py-2 bg-amber-500 text-white rounded-lg font-bold hover:bg-amber-600">Express Interest</button></div></div>`:''}
-          </div>
-          <!-- Milestones -->
-          <div class="bg-white rounded-2xl border p-6"><h3 class="font-bold text-slate-800 mb-4"><i class="fas fa-flag-checkered mr-2 text-emerald-500"></i>Milestones</h3><div class="space-y-4">${(data.milestones||[]).map((m,i)=>`<div class="flex items-start gap-4"><div class="flex flex-col items-center"><div class="w-10 h-10 rounded-full ${m.status==='completed'?'bg-emerald-500':m.status==='in_progress'?'bg-blue-500 pulse-glow':'bg-slate-300'} flex items-center justify-center text-white font-bold">${i+1}</div>${i<(data.milestones||[]).length-1?'<div class="w-0.5 h-8 bg-slate-300 mt-1"></div>':''}</div><div class="flex-1 pb-4"><div class="flex items-center justify-between"><div class="font-bold text-slate-800">${m.title}</div><span class="text-xs px-2 py-1 rounded-full ${m.status==='completed'?'bg-emerald-100 text-emerald-700':m.status==='in_progress'?'bg-blue-100 text-blue-700':'bg-slate-100 text-slate-500'}">${(m.status||'').replace(/_/g,' ')}</span></div><div class="text-sm text-slate-700 mt-1">Tranche: ${formatEGP(m.tranche_amount)} (${m.tranche_percentage}%)</div></div></div>`).join('')}</div></div>
-          <!-- Governance -->
-          <div class="bg-white rounded-2xl border p-6"><h3 class="font-bold text-slate-800 mb-4"><i class="fas fa-list-check mr-2 text-purple-500"></i>Governance Timeline</h3><div class="space-y-3 max-h-80 overflow-y-auto">${(data.governance_events||[]).map(e=>`<div class="flex items-start gap-3 p-3 bg-slate-50 rounded-lg"><div class="w-8 h-8 rounded-full ${e.event_type?.includes('jozour')?'bg-amber-100':'bg-purple-100'} flex items-center justify-center flex-shrink-0"><i class="fas ${e.event_type?.includes('jozour')?'fa-shield text-amber-500':'fa-scroll text-purple-500'} text-sm"></i></div><div><div class="text-sm font-medium text-slate-800">${(e.event_type||'').replace(/_/g,' ')}</div><div class="text-xs text-slate-500">${e.actor_name||'AI System'} · ${timeAgo(e.created_at)}</div>${e.ai_model?`<div class="text-xs text-purple-500 mt-1"><i class="fas fa-robot mr-1"></i>${e.ai_model}</div>`:''}</div></div>`).join('')}</div></div>
-        </div>
-        <!-- Sidebar -->
-        <div class="space-y-6">
-          <div class="bg-white rounded-2xl border p-4"><h3 class="font-bold text-slate-800 mb-3"><i class="fas fa-users mr-2 text-blue-500"></i>Cap Table</h3><div class="space-y-2">${(data.shareholders||[]).map(s=>`<div class="flex items-center justify-between p-2 rounded-lg hover:bg-slate-50"><div class="flex items-center gap-2"><div class="w-7 h-7 rounded-full ${s.acquired_via==='platform_fee'?'bg-gradient-to-br from-amber-400 to-purple-400':'bg-gradient-to-br from-blue-400 to-purple-400'} flex items-center justify-center text-white text-xs font-bold">${s.acquired_via==='platform_fee'?'S':(s.full_name||'?')[0]}</div><div class="text-sm"><div class="font-medium">${s.acquired_via==='platform_fee'?'SHERKETI':s.full_name}</div><div class="text-xs text-slate-400">${s.acquired_via==='platform_fee'?'Platform Equity':s.acquired_via}</div></div></div><div class="text-right"><div class="font-bold text-sm">${formatPercent(s.equity_percentage)}</div><div class="text-xs text-slate-400">${s.shares_count} shares</div></div></div>`).join('')}</div></div>
-          <div class="bg-white rounded-2xl border p-4"><h3 class="font-bold text-slate-800 mb-3"><i class="fas fa-user-tie mr-2 text-amber-500"></i>Board</h3><div class="space-y-2">${(data.board||[]).map(b=>`<div class="flex items-center gap-3 p-2 ${b.role==='jozour_observer'?'bg-amber-50 rounded-lg border border-amber-200':''}"><div class="w-8 h-8 rounded-full ${b.role==='jozour_observer'?'bg-amber-500':'bg-blue-500'} flex items-center justify-center text-white text-sm"><i class="fas ${b.role==='jozour_observer'?'fa-shield':'fa-user'}"></i></div><div class="flex-1"><div class="text-sm font-medium">${b.full_name}</div><div class="text-xs text-slate-500">${boardRoleLabel(b.role)}${b.has_veto?' · <span class="text-red-600 font-semibold">VETO</span>':''}${b.term_end?' · Until '+formatDate(b.term_end):''}</div></div></div>`).join('')}</div></div>
-          <div class="bg-white rounded-2xl border p-4"><h3 class="font-bold text-slate-800 mb-3"><i class="fas fa-gavel mr-2 text-red-500"></i>Active Votes</h3>${(data.active_votes||[]).length===0?'<p class="text-sm text-slate-400 text-center py-3">No active votes</p>':''}${(data.active_votes||[]).map(v=>`<div class="p-3 bg-blue-50 rounded-lg mb-2"><div class="text-sm font-medium">${v.title}</div><div class="text-xs text-slate-500 mt-1">${(v.vote_type||'').replace(/_/g,' ')} · ${formatDate(v.voting_deadline)}</div>${currentUser?`<div class="flex gap-2 mt-2"><button onclick="castVote(${v.id},'for')" class="text-xs px-3 py-1 bg-emerald-500 text-white rounded-full">Vote For</button><button onclick="castVote(${v.id},'against')" class="text-xs px-3 py-1 bg-red-500 text-white rounded-full">Against</button></div>`:''}</div>`).join('')}</div>
-          ${(data.risk_alerts||[]).length>0?`<div class="bg-white rounded-2xl border p-4"><h3 class="font-bold mb-3"><i class="fas fa-exclamation-triangle mr-2 text-red-500"></i>Alerts</h3>${(data.risk_alerts||[]).map(a=>`<div class="p-3 ${a.alert_level==='red'?'bg-red-50 border-red-200':'bg-amber-50 border-amber-200'} rounded-lg mb-2 border"><div class="flex items-center gap-2"><span class="status-dot ${a.alert_level==='red'?'status-frozen':'status-pending'}"></span><span class="text-sm font-medium">${a.title}</span></div><p class="text-xs text-slate-600 mt-1">${a.description}</p></div>`).join('')}</div>`:''}
-          <div class="bg-white rounded-2xl border p-4"><h3 class="font-bold mb-3"><i class="fas fa-vault mr-2 text-emerald-500"></i>Escrow</h3>${(data.escrow_summary||[]).map(e=>`<div class="flex justify-between py-2 border-b border-slate-100 last:border-0"><span class="text-sm capitalize">${e.transaction_type}</span><span class="font-bold text-sm">${formatEGP(e.total)}</span></div>`).join('')}</div>
-        </div>
-      </div>`;
-  } catch (e) { c.innerHTML = `<div class="text-center py-10 text-red-500">${e.message}</div>`; }
-}
-
-function renderCreateProject() {
-  return `${renderNav()}<div class="pt-20 pb-8 px-4 sm:px-6 max-w-3xl mx-auto fade-in">
-    <h1 class="text-2xl font-bold mb-2"><i class="fas fa-plus-circle mr-2 text-blue-500"></i>Create New Project</h1>
-    <p class="text-slate-500 text-sm mb-6">Submit for AI feasibility review and fundraising</p>
-    <form id="createProjectForm" class="bg-white rounded-2xl border p-6 space-y-5">
-      <div class="grid md:grid-cols-2 gap-4"><div><label class="block text-sm font-medium text-slate-700 mb-1">Title *</label><input type="text" name="title" required class="w-full px-4 py-2.5 border border-slate-300 rounded-lg" placeholder="e.g. NileTech Solutions"></div><div><label class="block text-sm font-medium text-slate-700 mb-1">Title (Arabic)</label><input type="text" name="title_ar" class="w-full px-4 py-2.5 border border-slate-300 rounded-lg ar-text" dir="rtl"></div></div>
-      <div><label class="block text-sm font-medium text-slate-700 mb-1">Description *</label><textarea name="description" required rows="4" class="w-full px-4 py-2.5 border border-slate-300 rounded-lg" placeholder="Describe your business..."></textarea></div>
-      <div class="grid md:grid-cols-3 gap-4">
-        <div><label class="block text-sm font-medium mb-1">Sector *</label><select name="sector" required class="w-full px-3 py-2.5 border rounded-lg">${['Technology','FinTech','Green Energy','Healthcare','Food & Beverage','Real Estate','Education','E-Commerce','Manufacturing','Agriculture','Logistics','Other'].map(s=>`<option value="${s}">${s}</option>`).join('')}</select></div>
-        <div><label class="block text-sm font-medium mb-1">Tier *</label><select name="tier" required class="w-full px-3 py-2.5 border rounded-lg" onchange="updateTierInfo(this.value)"><option value="A">Tier A (max 3M)</option><option value="B">Tier B (max 25M)</option><option value="C">Tier C (Unlimited)</option><option value="D">Tier D (Existing Co.)</option></select></div>
-        <div><label class="block text-sm font-medium mb-1">Region</label><select name="company_region" class="w-full px-3 py-2.5 border rounded-lg"><option value="cairo">Cairo</option><option value="alexandria">Alexandria</option><option value="delta">Delta</option><option value="upper_egypt">Upper Egypt</option></select></div>
+// ==========================================================================
+// PROJECTS
+// ==========================================================================
+function renderProjects() {
+  return `<div class="fade-in">
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold text-slate-800">Projects</h1>
+      <div class="flex gap-2">
+        ${currentUser?.role === 'founder' ? '<button onclick="navigate(\'create-project\')" class="btn-primary text-sm"><i class="fas fa-plus mr-1"></i>New Project</button>' : ''}
       </div>
-      <div id="tierInfo" class="p-3 bg-purple-50 rounded-lg text-sm"><i class="fas fa-info-circle text-purple-500 mr-1"></i><strong>Tier A:</strong> SHERKETI: 2.5% cash + 2.5% equity + 5yr board (ALL tiers). Founder: see tier rules.</div>
-      <div class="grid md:grid-cols-3 gap-4">
-        <div><label class="block text-sm font-medium mb-1">Funding Goal (EGP) *</label><input type="number" name="funding_goal" required min="50000" class="w-full px-4 py-2.5 border rounded-lg" placeholder="5000000"></div>
-        <div><label class="block text-sm font-medium mb-1">Equity Offered (%) *</label><input type="number" name="equity_offered" required min="1" max="49" step="0.1" class="w-full px-4 py-2.5 border rounded-lg" placeholder="25"></div>
-        <div><label class="block text-sm font-medium mb-1">Min. Investment</label><input type="number" name="min_investment" min="50" value="50" class="w-full px-4 py-2.5 border rounded-lg"></div>
-      </div>
-      <div><label class="block text-sm font-medium mb-2">Milestones</label><div id="milestonesContainer" class="space-y-2"><div class="flex gap-2"><input type="text" placeholder="Milestone title" class="milestone-title flex-1 px-3 py-2 border rounded-lg text-sm"><input type="number" placeholder="Amount EGP" class="milestone-amount w-32 px-3 py-2 border rounded-lg text-sm"></div></div><button type="button" onclick="addMilestone()" class="mt-2 text-sm text-blue-600 hover:text-blue-700"><i class="fas fa-plus mr-1"></i>Add Milestone</button></div>
-      <div id="createError" class="text-red-600 text-sm hidden p-3 bg-red-50 rounded-lg"></div>
-      <div id="createSuccess" class="text-emerald-600 text-sm hidden p-3 bg-emerald-50 rounded-lg"></div>
-      <button type="submit" class="btn-primary w-full py-3"><i class="fas fa-paper-plane mr-2"></i>Create & Submit for AI Review</button>
-    </form></div>`;
+    </div>
+    <div class="flex gap-2 mb-4 flex-wrap">
+      ${['all','live_fundraising','interest_phase','funded','active','draft'].map(s => 
+        `<button onclick="loadProjects('${s}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold border ${s === 'all' ? 'bg-primary-50 border-primary-200 text-primary-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}" id="filter-${s}">${s === 'all' ? 'All' : s.replace(/_/g,' ')}</button>`
+      ).join('')}
+    </div>
+    <div id="projects-list"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-primary-500 text-2xl"></i></div></div>
+  </div>`;
 }
 
-function renderConstitution() {
-  return `${renderNav()}<div class="pt-20 pb-8 px-4 sm:px-6 max-w-5xl mx-auto fade-in">
-    <div class="text-center mb-8"><h1 class="text-3xl font-bold"><i class="fas fa-scroll mr-2 text-amber-500"></i>SHERKETI Constitution</h1><p class="text-slate-500">Publicly auditable governance rules</p></div>
-    <div id="constitutionContent"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-3xl text-blue-500"></i></div></div></div>`;
-}
-
-async function loadConstitution() {
-  const c = document.getElementById('constitutionContent'); if (!c) return;
+async function loadProjects(status = 'all') {
+  const el = document.getElementById('projects-list');
+  if (!el) return;
   try {
-    const d = await api('/api/constitution/rules');
-    c.innerHTML = `
-      <div class="space-y-4 mb-8">${(d.immutable_core_rules||[]).map(r=>`<div class="bg-white rounded-xl border ${r.amendable?'border-amber-200':'border-red-200'} p-5 card-hover"><div class="flex items-start gap-4"><div class="w-10 h-10 rounded-xl ${r.amendable?'bg-amber-100 text-amber-600':'bg-red-100 text-red-600'} flex items-center justify-center font-bold flex-shrink-0">${r.id}</div><div class="flex-1"><div class="flex items-center gap-2 mb-1"><h3 class="font-bold text-slate-800">${r.title}</h3>${!r.amendable?'<span class="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded-full font-medium"><i class="fas fa-lock mr-1"></i>Non-Amendable</span>':'<span class="px-2 py-0.5 bg-amber-100 text-amber-600 text-xs rounded-full font-medium">75% Supermajority</span>'}</div><p class="ar-text text-sm text-slate-400 font-cairo mb-2">${r.title_ar||''}</p><p class="text-sm text-slate-600 mb-2">${r.description}</p><div class="text-xs text-slate-500 bg-slate-50 p-2 rounded"><i class="fas fa-shield mr-1"></i><strong>Enforcement:</strong> ${r.enforcement}</div></div></div></div>`).join('')}</div>
-      <!-- SHERKETI Fee Model Section -->
-      ${d.jozour_fee_model?`<div class="bg-gradient-to-r from-purple-50 to-blue-50 rounded-2xl border border-purple-200 p-6 mb-8"><h3 class="font-bold text-lg text-slate-800 mb-4"><i class="fas fa-hand-holding-dollar mr-2 text-purple-500"></i>SHERKETI Fee Model (Rule #8)</h3>
-        <div class="grid md:grid-cols-4 gap-4">${Object.entries(d.jozour_fee_model.tiers||{}).map(([k,v])=>`<div class="bg-white rounded-xl p-4 border"><div class="font-bold text-center mb-2"><span class="px-3 py-1 tier-badge-${k} text-white rounded-full text-sm">Tier ${k}</span></div><div class="space-y-1 text-sm"><div class="flex justify-between"><span class="text-slate-500">Commission</span><span class="font-bold text-emerald-600">${v.cash_commission}</span></div><div class="flex justify-between"><span class="text-slate-500">Equity</span><span class="font-bold text-purple-600">${v.equity_stake}</span></div><div class="flex justify-between"><span class="text-slate-500">Board</span><span class="font-bold ${v.board_seat?'text-amber-600':'text-slate-400'}">${v.board_seat?v.board_term:'None'}</span></div><div class="flex justify-between"><span class="text-slate-500">Veto</span><span class="font-bold ${v.veto_power?'text-red-600':'text-slate-400'}">${v.veto_power?'Yes':'No'}</span></div></div></div>`).join('')}</div>
-        <p class="text-sm text-slate-600 mt-4"><i class="fas fa-info-circle mr-1"></i><strong>After 5 years:</strong> ${d.jozour_fee_model.after_5_years}</p></div>`:''}
-      <div class="grid md:grid-cols-2 gap-6 mb-8">
-        <div class="bg-white rounded-xl border p-5"><h3 class="font-bold mb-3"><i class="fas fa-gavel mr-2 text-blue-500"></i>Voting Rules</h3>${Object.entries(d.governance_rules?.voting||{}).map(([k,v])=>`<div class="flex items-center justify-between py-2 border-b border-slate-100 last:border-0 text-sm"><span class="text-slate-500 capitalize">${k.replace(/_/g,' ')}</span><span class="font-medium text-slate-800 text-right max-w-[60%]">${v}</span></div>`).join('')}</div>
-        <div class="bg-white rounded-xl border p-5"><h3 class="font-bold mb-3"><i class="fas fa-money-bill-transfer mr-2 text-emerald-500"></i>Transaction Approval</h3>${Object.entries(d.governance_rules?.transaction_approval||{}).map(([k,v])=>`<div class="flex items-start gap-2 py-2 border-b border-slate-100 last:border-0 text-sm"><span class="text-slate-500 capitalize min-w-[100px]">${k.replace(/_/g,' ')}</span><span class="font-medium text-slate-800">${v}</span></div>`).join('')}</div>
-      </div>
-      <div class="grid md:grid-cols-2 gap-6">
-        <div class="bg-white rounded-xl border p-5"><h3 class="font-bold mb-3"><i class="fas fa-layer-group mr-2 text-purple-500"></i>Project Tiers</h3>${Object.entries(d.project_tiers||{}).map(([k,v])=>`<div class="flex items-center justify-between py-2 border-b border-slate-100 last:border-0"><div><span class="px-2 py-0.5 tier-badge-${k} text-white text-xs rounded font-bold mr-2">Tier ${k}</span><span class="text-sm">${v.name}</span></div><span class="text-sm font-medium">${v.max_raise}</span></div>`).join('')}</div>
-        <div class="bg-white rounded-xl border p-5"><h3 class="font-bold mb-3"><i class="fas fa-brain mr-2 text-purple-500"></i>AI Modules</h3><div class="space-y-2">${(d.ai_modules||[]).map(m=>`<div class="text-sm text-slate-600 flex items-center gap-2"><i class="fas fa-check-circle text-purple-400"></i>${m}</div>`).join('')}</div></div>
-      </div>`;
-  } catch (e) { c.innerHTML = `<div class="text-center py-10 text-red-500">${e.message}</div>`; }
-}
-
-function renderSecondaryMarket() {
-  return `${renderNav()}<div class="pt-20 pb-8 px-4 sm:px-6 max-w-7xl mx-auto fade-in">
-    <div class="flex items-center justify-between mb-6"><div><h1 class="text-2xl font-bold"><i class="fas fa-chart-line mr-2 text-emerald-500"></i>Secondary Market</h1><p class="text-slate-500 text-sm">72h partner-first priority + AI dynamic valuation</p></div></div>
-    <div id="marketContent"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-3xl text-blue-500"></i></div></div></div>`;
-}
-
-async function loadMarketData() {
-  const c = document.getElementById('marketContent'); if (!c) return;
-  try {
-    const d = await api('/api/market/orders');
-    c.innerHTML = `<div class="bg-white rounded-xl border overflow-hidden"><div class="p-4 border-b border-slate-100 flex items-center gap-4"><span class="font-bold">Active Listings</span><span class="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">${(d.orders||[]).length} orders</span></div>
-      ${(d.orders||[]).length===0?'<div class="p-8 text-center text-slate-400"><i class="fas fa-store text-3xl mb-2"></i><p>No active listings</p></div>':''}
-      <div class="divide-y divide-slate-100">${(d.orders||[]).map(o=>`<div class="p-4 hover:bg-slate-50"><div class="flex items-center justify-between"><div class="flex items-center gap-3"><div class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-blue-500 flex items-center justify-center text-white"><i class="fas fa-exchange-alt"></i></div><div><div class="font-bold">${o.project_title||'Project #'+o.project_id}</div><div class="text-xs text-slate-500">${o.shares_count} shares (${formatPercent(o.equity_percentage)}) · ${o.seller_name||'Seller'}</div></div></div><div class="text-right"><div class="font-bold text-lg">${formatEGP(o.ask_price)}<span class="text-xs text-slate-400">/share</span></div><div class="text-xs ${o.ai_valuation>o.ask_price?'text-emerald-500':'text-red-500'}">AI: ${formatEGP(o.ai_valuation)} ${o.ai_valuation>o.ask_price?'Underpriced':'Premium'}</div></div></div>
-        <div class="flex items-center justify-between mt-3"><div><span class="px-2 py-1 text-xs rounded-full ${o.status==='priority_window'?'bg-amber-100 text-amber-700':'bg-blue-100 text-blue-700'}">${(o.status||'').replace(/_/g,' ')}</span>${o.priority_window_end?` <span class="text-xs text-slate-400 ml-2"><i class="fas fa-clock mr-1"></i>Priority: ${formatDate(o.priority_window_end)}</span>`:''}</div>${currentUser?`<button onclick="buyShares(${o.id})" class="btn-primary text-xs py-2">Buy Shares</button>`:'<span class="text-xs text-slate-400">Login to trade</span>'}</div></div>`).join('')}</div></div>`;
-  } catch (e) { c.innerHTML = `<div class="text-center py-10 text-red-500">${e.message}</div>`; }
-}
-
-function renderAITools() {
-  return `${renderNav()}<div class="pt-20 pb-8 px-4 sm:px-6 max-w-5xl mx-auto fade-in">
-    <h1 class="text-2xl font-bold mb-2"><i class="fas fa-brain mr-2 text-purple-500"></i>AI Engine Tools</h1><p class="text-slate-500 text-sm mb-6">AI-powered analysis and calculation engines</p>
-    <div class="grid md:grid-cols-2 gap-6">
-      <div class="bg-white rounded-2xl border p-6"><h3 class="font-bold mb-4"><i class="fas fa-calculator mr-2 text-blue-500"></i>SHERKETI Valuation v3.0</h3><form id="valuationForm" class="space-y-3"><input type="number" name="funding_goal" placeholder="Funding Goal (EGP)" class="w-full px-3 py-2 border rounded-lg text-sm" required><select name="sector" class="w-full px-3 py-2 border rounded-lg text-sm">${['Technology','FinTech','Green Energy','Healthcare','Food & Beverage','Education','E-Commerce'].map(s=>`<option>${s}</option>`).join('')}</select><select name="tier" class="w-full px-3 py-2 border rounded-lg text-sm"><option value="A">Tier A</option><option value="B">Tier B</option><option value="C">Tier C</option><option value="D">Tier D</option></select><input type="number" name="feasibility_score" placeholder="Feasibility Score (0-100)" min="0" max="100" value="70" class="w-full px-3 py-2 border rounded-lg text-sm"><button type="submit" class="btn-primary w-full py-2 text-sm">Calculate</button></form><div id="valuationResult" class="mt-3"></div></div>
-      <div class="bg-white rounded-2xl border p-6"><h3 class="font-bold mb-4"><i class="fas fa-coins mr-2 text-amber-500"></i>AI Salary Engine</h3><form id="salaryForm" class="space-y-3"><select name="position" class="w-full px-3 py-2 border rounded-lg text-sm">${['CEO/Founder','CTO','CFO','Manager','Senior Developer','Developer','Accountant'].map(p=>`<option>${p}</option>`).join('')}</select><select name="tier" class="w-full px-3 py-2 border rounded-lg text-sm"><option value="A">Tier A (x0.8)</option><option value="B" selected>Tier B (x1.0)</option><option value="C">Tier C (x1.3)</option><option value="D">Tier D (x1.5)</option></select><div class="flex gap-2"><input type="number" name="milestone_achievement" placeholder="Milestone %" min="0" max="100" value="60" class="w-full px-3 py-2 border rounded-lg text-sm"><select name="region" class="w-full px-3 py-2 border rounded-lg text-sm"><option value="cairo">Cairo</option><option value="alexandria">Alexandria</option><option value="delta">Delta</option><option value="upper_egypt">Upper Egypt</option></select></div><input type="number" name="company_profitability" placeholder="Profitability %" value="50" class="w-full px-3 py-2 border rounded-lg text-sm"><button type="submit" class="btn-primary w-full py-2 text-sm">Calculate</button></form><div id="salaryResult" class="mt-3"></div></div>
-      <div class="bg-white rounded-2xl border p-6"><h3 class="font-bold mb-4"><i class="fas fa-receipt mr-2 text-red-500"></i>Tax Calculator</h3><form id="taxForm" class="space-y-3"><input type="number" name="amount" placeholder="Amount (EGP)" class="w-full px-3 py-2 border rounded-lg text-sm" required><select name="tax_type" class="w-full px-3 py-2 border rounded-lg text-sm"><option value="capital_gains">Capital Gains</option><option value="dividend_withholding">Dividend Withholding</option><option value="vat">VAT</option></select><select name="entity_type" class="w-full px-3 py-2 border rounded-lg text-sm"><option value="individual">Individual (14%)</option><option value="company">Company (22.5%)</option></select><button type="submit" class="btn-primary w-full py-2 text-sm">Calculate</button></form><div id="taxResult" class="mt-3"></div></div>
-      <div class="bg-white rounded-2xl border p-6"><h3 class="font-bold mb-4"><i class="fas fa-star mr-2 text-amber-500"></i>Reputation Calculator</h3><form id="reputationForm" class="space-y-3"><select name="user_type" class="w-full px-3 py-2 border rounded-lg text-sm" onchange="updateRepFields(this.value)"><option value="investor">Investor</option><option value="founder">Founder</option><option value="board_member">Board Member</option></select><div id="repFields"></div><button type="submit" class="btn-primary w-full py-2 text-sm">Calculate</button></form><div id="reputationResult" class="mt-3"></div></div>
-    </div></div>`;
-}
-
-function renderAdmin() {
-  return `${renderNav()}<div class="pt-20 pb-8 px-4 sm:px-6 max-w-7xl mx-auto fade-in">
-    <h1 class="text-2xl font-bold mb-6"><i class="fas fa-cog mr-2 text-red-500"></i>SHERKETI Admin Panel</h1>
-    <div class="flex gap-2 mb-6 flex-wrap">${['overview','users','projects','audit','regulator','jozour-terms'].map(s=>`<button onclick="loadAdminSection('${s}')" class="px-4 py-2 ${s==='overview'?'bg-blue-600 text-white':'bg-white border border-slate-200 hover:border-blue-500'} rounded-lg text-sm font-medium capitalize">${s.replace(/-/g,' ')}</button>`).join('')}</div>
-    <div id="adminContent"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-3xl text-blue-500"></i></div></div></div>`;
-}
-
-async function loadAdminSection(s) {
-  const c = document.getElementById('adminContent'); if (!c) return;
-  c.innerHTML = '<div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-3xl text-blue-500"></i></div>';
-  try {
-    if (s === 'overview') { const d = await api('/api/admin/overview'); c.innerHTML = renderAdminDash(d); }
-    else if (s === 'users') {
-      const d = await api('/api/admin/users');
-      c.innerHTML = `<div class="bg-white rounded-xl border overflow-hidden"><div class="p-4 border-b"><h3 class="font-bold">Users (${d.total})</h3></div><div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="bg-slate-50 text-left"><th class="p-3">Name</th><th class="p-3">Email</th><th class="p-3">Role</th><th class="p-3">Status</th><th class="p-3">Score</th><th class="p-3">Actions</th></tr></thead><tbody>${(d.users||[]).map(u=>`<tr class="border-t hover:bg-slate-50"><td class="p-3 font-medium">${u.full_name}</td><td class="p-3 text-slate-500">${u.email}</td><td class="p-3"><span class="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs capitalize">${u.role}</span></td><td class="p-3"><span class="px-2 py-1 ${u.verification_status==='verified'?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'} rounded-full text-xs">${u.verification_status}</span></td><td class="p-3">${u.reputation_score}</td><td class="p-3">${u.verification_status!=='verified'?`<button onclick="adminKYC(${u.id},'approve')" class="text-xs text-emerald-600 hover:underline mr-2">Approve</button><button onclick="adminKYC(${u.id},'reject')" class="text-xs text-red-600 hover:underline">Reject</button>`:'-'}</td></tr>`).join('')}</tbody></table></div></div>`;
-    } else if (s === 'projects') {
-      const d = await api('/api/admin/projects');
-      c.innerHTML = `<div class="bg-white rounded-xl border overflow-hidden"><div class="p-4 border-b"><h3 class="font-bold">All Projects</h3></div>${(d.projects||[]).map(p=>`<div class="p-4 border-b hover:bg-slate-50 flex items-center justify-between"><div class="flex items-center gap-3"><div class="w-10 h-10 rounded-xl tier-badge-${p.tier} flex items-center justify-center text-white font-bold">${p.tier}</div><div><div class="font-bold cursor-pointer hover:text-blue-600" onclick="navigate('project-detail',{id:${p.id}})">${p.title}</div><div class="text-xs text-slate-500">${p.founder_name} · ${(p.status||'').replace(/_/g,' ')} · ${formatEGP(p.funding_raised)}/${formatEGP(p.funding_goal)}</div></div></div><div class="flex gap-2 items-center">${p.status!=='frozen'?`<button onclick="adminFreeze(${p.id})" class="btn-danger text-xs py-1 px-3"><i class="fas fa-snowflake mr-1"></i>Freeze</button>`:'<span class="text-xs text-red-500 font-bold">FROZEN</span>'}</div></div>`).join('')}</div>`;
-    } else if (s === 'audit') {
-      const d = await api('/api/admin/audit-log');
-      c.innerHTML = `<div class="bg-white rounded-xl border overflow-hidden"><div class="p-4 border-b"><h3 class="font-bold"><i class="fas fa-link mr-2 text-purple-500"></i>Immutable Audit Log</h3></div><div class="overflow-x-auto"><table class="w-full text-xs"><thead><tr class="bg-slate-50"><th class="p-3 text-left">ID</th><th class="p-3 text-left">Action</th><th class="p-3 text-left">Entity</th><th class="p-3 text-left">Actor</th><th class="p-3 text-left">Hash</th><th class="p-3 text-left">Time</th></tr></thead><tbody>${(d.audit_log||[]).map(l=>`<tr class="border-t hover:bg-slate-50"><td class="p-3 font-mono">#${l.id}</td><td class="p-3 font-medium">${l.action}</td><td class="p-3">${l.entity_type} #${l.entity_id}</td><td class="p-3">${l.actor_name||'System'}</td><td class="p-3 font-mono text-purple-600">${(l.output_hash||'').substring(0,12)}...</td><td class="p-3 text-slate-500">${timeAgo(l.created_at)}</td></tr>`).join('')}</tbody></table></div></div>`;
-    } else if (s === 'regulator') {
-      const d = await api('/api/dashboard/regulator');
-      c.innerHTML = renderRegulatorDash(d);
-    } else if (s === 'jozour-terms') {
-      const d = await api('/api/constitution/jozour-terms');
-      c.innerHTML = `<div class="bg-purple-50 border border-purple-200 rounded-xl p-4 mb-6"><h3 class="font-bold text-purple-800"><i class="fas fa-shield mr-2"></i>SHERKETI Board Terms Tracker</h3><p class="text-sm text-purple-600 mt-1">Monitor 5-year board seats and veto status across all projects.</p></div>
-        <div class="bg-white rounded-xl border overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="bg-slate-50"><th class="p-3 text-left">Project</th><th class="p-3">Tier</th><th class="p-3">Commission</th><th class="p-3">Equity</th><th class="p-3">Veto</th><th class="p-3">Term Start</th><th class="p-3">Term End</th><th class="p-3">Status</th></tr></thead><tbody>${(d.jozour_board_terms||[]).map(t=>`<tr class="border-t hover:bg-slate-50"><td class="p-3 font-medium">${t.title}</td><td class="p-3 text-center"><span class="px-2 py-0.5 tier-badge-${t.tier} text-white text-xs rounded">${t.tier}</span></td><td class="p-3 text-center text-emerald-600 font-bold">${t.jozour_commission_percent||0}%</td><td class="p-3 text-center text-purple-600 font-bold">${t.jozour_equity_percent||0}%</td><td class="p-3 text-center">${t.jozour_veto_active?'<span class="text-red-600 font-bold">Active</span>':'<span class="text-slate-400">None</span>'}</td><td class="p-3 text-center text-xs">${formatDate(t.jozour_board_term_start||t.term_start)}</td><td class="p-3 text-center text-xs">${formatDate(t.jozour_board_term_end||t.term_end)}</td><td class="p-3 text-center"><span class="px-2 py-0.5 ${t.board_status==='active'?'bg-emerald-100 text-emerald-700':t.board_status==='pending_renewal_vote'?'bg-amber-100 text-amber-700':'bg-slate-100 text-slate-500'} text-xs rounded-full">${t.board_status||t.status||'-'}</span></td></tr>`).join('')}</tbody></table></div></div>
-        <button onclick="checkJozourTerms()" class="btn-primary mt-4"><i class="fas fa-sync mr-1"></i>Check for Expiring Terms & Trigger Votes</button>
-        <div id="termCheckResult" class="mt-3"></div>`;
+    const params = status !== 'all' ? `?status=${status}` : '';
+    const data = await api(`/api/projects${params}`);
+    const projects = data.projects || [];
+    if (projects.length === 0) {
+      el.innerHTML = '<p class="text-slate-400 text-center py-16">No projects found</p>';
+      return;
     }
-  } catch (e) { c.innerHTML = `<div class="text-center py-10 text-red-500">${e.message}</div>`; }
-}
-
-function renderNotifications() {
-  return `${renderNav()}<div class="pt-20 pb-8 px-4 sm:px-6 max-w-3xl mx-auto fade-in">
-    <div class="flex items-center justify-between mb-6"><h1 class="text-2xl font-bold"><i class="fas fa-bell mr-2 text-amber-500"></i>Notifications</h1><button onclick="markAllRead()" class="btn-secondary text-sm">Mark All Read</button></div>
-    <div id="notifContent"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-3xl text-blue-500"></i></div></div></div>`;
-}
-
-async function loadNotifications() {
-  const c = document.getElementById('notifContent'); if (!c) return;
-  try {
-    const d = await api('/api/governance/notifications');
-    c.innerHTML = (d.notifications||[]).length===0?'<div class="text-center py-16 text-slate-400"><i class="fas fa-bell-slash text-3xl mb-3"></i><p>No notifications</p></div>':'';
-    c.innerHTML += (d.notifications||[]).map(n=>`<div class="bg-white rounded-xl border ${n.read_status?'border-slate-200':'border-blue-300 bg-blue-50'} p-4 mb-3 card-hover"><div class="flex items-start gap-3"><div class="w-10 h-10 rounded-xl ${n.read_status?'bg-slate-100':'bg-blue-100'} flex items-center justify-center flex-shrink-0"><i class="fas ${n.notification_type==='vote_notice'?'fa-gavel text-blue-500':n.notification_type==='jozour_info'?'fa-shield text-amber-500':'fa-bell text-slate-400'}"></i></div><div class="flex-1"><div class="font-medium text-slate-800">${n.title}</div><div class="text-sm text-slate-600 mt-1">${n.message}</div><div class="text-xs text-slate-400 mt-2">${n.project_title||''} · ${timeAgo(n.created_at)}</div></div>${!n.read_status?`<button onclick="markRead(${n.id})" class="text-xs text-blue-600">Mark read</button>`:''}</div></div>`).join('');
-  } catch (e) { c.innerHTML = `<div class="text-red-500">${e.message}</div>`; }
-}
-
-// ============ Event Handlers ============
-function attachEvents() {
-  const authForm = document.getElementById('authForm');
-  if (authForm) authForm.onsubmit = async (e) => {
-    e.preventDefault(); const form = new FormData(authForm); const data = Object.fromEntries(form); const err = document.getElementById('authError'); err?.classList.add('hidden');
-    try {
-      const isLogin = currentPage === 'login'; const r = await api(`/api/auth/${isLogin?'login':'register'}`, { method: 'POST', body: JSON.stringify(data) });
-      currentToken = r.token; localStorage.setItem('sherketi_token', currentToken);
-      if (r.user) currentUser = r.user; else { const me = await api('/api/auth/me'); currentUser = me.user; }
-      navigate('dashboard');
-    } catch (er) { if (err) { err.textContent = er.message; err.classList.remove('hidden'); } }
-  };
-
-  const createForm = document.getElementById('createProjectForm');
-  if (createForm) createForm.onsubmit = async (e) => {
-    e.preventDefault(); const form = new FormData(createForm); const data = Object.fromEntries(form);
-    const titles = document.querySelectorAll('.milestone-title'); const amounts = document.querySelectorAll('.milestone-amount');
-    const milestones = []; titles.forEach((t,i) => { if (t.value) milestones.push({ title: t.value, amount: parseFloat(amounts[i]?.value)||0 }); });
-    data.milestones = milestones; data.funding_goal = parseFloat(data.funding_goal); data.equity_offered = parseFloat(data.equity_offered); data.min_investment = parseFloat(data.min_investment)||50;
-    if (data.investor_cap_type === 'limited' && data.investor_cap) data.investor_cap = parseInt(data.investor_cap);
-    const err = document.getElementById('createError'); const suc = document.getElementById('createSuccess'); err?.classList.add('hidden'); suc?.classList.add('hidden');
-    try {
-      const r = await api('/api/projects', { method: 'POST', body: JSON.stringify(data) });
-      const rev = await api(`/api/projects/${r.projectId}/submit-review`, { method: 'POST' });
-      if (suc) { suc.innerHTML = `<i class="fas fa-check-circle mr-1"></i>${r.message}<br><strong>AI Score: ${rev.score||'N/A'}/100</strong><br>SHERKETI: ${r.jozour_fee?.commission} commission + ${r.jozour_fee?.equity} equity<br><button onclick="navigate('project-detail',{id:${r.projectId}})" class="btn-primary text-xs mt-2">View Project</button>`; suc.classList.remove('hidden'); }
-    } catch (er) { if (err) { err.textContent = er.message; err.classList.remove('hidden'); } }
-  };
-
-  // AI forms
-  const valForm = document.getElementById('valuationForm');
-  if (valForm) valForm.onsubmit = async (e) => { e.preventDefault(); const f = Object.fromEntries(new FormData(valForm)); f.funding_goal = parseFloat(f.funding_goal); f.feasibility_score = parseFloat(f.feasibility_score);
-    try { const r = await api('/api/ai/valuation', { method:'POST', body:JSON.stringify(f) }); document.getElementById('valuationResult').innerHTML = `<div class="p-3 bg-blue-50 rounded-lg text-sm space-y-1"><div class="font-bold text-lg text-blue-800">${formatEGP(r.pre_money_valuation)}</div><div class="text-blue-600">Post-Money: ${formatEGP(r.post_money_valuation)} · Investor: ${r.investor_equity_percent}%</div><div class="text-xs text-purple-600 mt-2"><strong>SHERKETI:</strong> ${r.jozour_fees?.cash_commission?.percent} commission (${formatEGP(r.jozour_fees?.cash_commission?.amount)}) + ${r.jozour_fees?.equity_stake?.percent} equity · Board: ${r.jozour_fees?.board_seat}</div></div>`; } catch (e) { document.getElementById('valuationResult').innerHTML = `<div class="text-red-500 text-sm">${e.message}</div>`; }
-  };
-  const salForm = document.getElementById('salaryForm');
-  if (salForm) salForm.onsubmit = async (e) => { e.preventDefault(); const f = Object.fromEntries(new FormData(salForm)); f.milestone_achievement = parseFloat(f.milestone_achievement); f.company_profitability = parseFloat(f.company_profitability);
-    try { const r = await api('/api/ai/salary', { method:'POST', body:JSON.stringify(f) }); document.getElementById('salaryResult').innerHTML = `<div class="p-3 bg-amber-50 rounded-lg text-sm"><div class="font-bold text-lg text-amber-800">${formatEGP(r.calculated_salary)}/month</div><div class="grid grid-cols-2 gap-1 mt-2 text-xs">${Object.entries(r.breakdown).map(([k,v])=>`<div><span class="text-slate-500">${k.replace(/_/g,' ')}:</span> ${v}</div>`).join('')}</div></div>`; } catch (e) { document.getElementById('salaryResult').innerHTML = `<div class="text-red-500 text-sm">${e.message}</div>`; }
-  };
-  const txForm = document.getElementById('taxForm');
-  if (txForm) txForm.onsubmit = async (e) => { e.preventDefault(); const f = Object.fromEntries(new FormData(txForm)); f.amount = parseFloat(f.amount);
-    try { const r = await api('/api/ai/tax-calculate', { method:'POST', body:JSON.stringify(f) }); document.getElementById('taxResult').innerHTML = `<div class="p-3 bg-red-50 rounded-lg text-sm"><div class="flex justify-between"><span>Gross</span><span class="font-bold">${formatEGP(r.gross_amount)}</span></div><div class="flex justify-between"><span>Tax (${r.tax_rate})</span><span class="font-bold text-red-600">-${formatEGP(r.tax_amount)}</span></div><div class="flex justify-between border-t mt-1 pt-1"><span>Net</span><span class="font-bold text-emerald-600">${formatEGP(r.net_amount)}</span></div><div class="text-xs text-slate-500 mt-1">${r.form} · ${r.authority}</div></div>`; } catch (e) { document.getElementById('taxResult').innerHTML = `<div class="text-red-500 text-sm">${e.message}</div>`; }
-  };
-
-  if (currentPage === 'dashboard') setTimeout(loadDashboardData, 100);
-  if (currentPage === 'projects') setTimeout(() => filterProjects(), 100);
-  if (currentPage === 'project-detail') setTimeout(loadProjectDetail, 100);
-  if (currentPage === 'constitution') setTimeout(loadConstitution, 100);
-  if (currentPage === 'market') setTimeout(loadMarketData, 100);
-  if (currentPage === 'admin') setTimeout(() => loadAdminSection('overview'), 100);
-  if (currentPage === 'ai-tools') setTimeout(initAITools, 100);
-  if (currentPage === 'notifications') setTimeout(loadNotifications, 100);
-}
-
-function initAITools() { updateRepFields('investor'); }
-
-function updateRepFields(type) {
-  const c = document.getElementById('repFields'); if (!c) return;
-  const fields = { investor: ['commitment_fulfillment','payment_timeliness','governance_participation','holding_period','investment_diversity','feedback_quality'], founder: ['project_profitability','governance_compliance','financial_transparency','multiple_projects','investor_satisfaction','long_term_commitment'], board_member: ['participation_quorum','voting_quality','dispute_resolution','strategic_contributions','compliance_timeliness'] };
-  c.innerHTML = (fields[type]||[]).map(f=>`<div class="flex items-center gap-2"><label class="text-xs text-slate-500 capitalize w-36">${f.replace(/_/g,' ')}</label><input type="range" name="${f}" min="0" max="100" value="50" class="flex-1 h-1"><span class="text-xs font-mono w-8">50</span></div>`).join('');
-  c.querySelectorAll('input[type=range]').forEach(inp => { inp.oninput = () => { inp.nextElementSibling.textContent = inp.value; }; });
-  const repForm = document.getElementById('reputationForm');
-  if (repForm) repForm.onsubmit = async (e) => { e.preventDefault(); const form = new FormData(repForm); const user_type = form.get('user_type'); const metrics = {};
-    (fields[user_type]||[]).forEach(f => { metrics[f] = parseFloat(form.get(f))||50; });
-    try { const r = await api('/api/ai/reputation', { method:'POST', body:JSON.stringify({ user_type, metrics }) }); document.getElementById('reputationResult').innerHTML = `<div class="p-3 bg-amber-50 rounded-lg text-center"><div class="text-3xl font-black ${r.reputation_score>=70?'text-emerald-600':r.reputation_score>=50?'text-amber-600':'text-red-600'}">${r.reputation_score}</div><div class="text-sm font-medium">${r.tier}</div></div>`; } catch (e) { document.getElementById('reputationResult').innerHTML = `<div class="text-red-500 text-sm">${e.message}</div>`; }
-  };
-}
-
-function updateTierInfo(tier) {
-  const c = document.getElementById('tierInfo'); if (!c) return;
-  const info = { A: 'SHERKETI: 2.5% cash + 2.5% equity + 5yr board (ALL tiers). Founder: see tier rules.', B: 'SHERKETI: 2.5% cash + 2.5% equity + 5yr board (ALL tiers). Founder: see tier rules.', C: 'SHERKETI: 2.5% cash + 2.5% equity + 5yr board (ALL tiers). Founder: see tier rules.', D: 'SHERKETI: 2.5% cash + 2.5% equity + 5yr board. Existing company 2014 AI valuation.' };
-  c.innerHTML = `<i class="fas fa-info-circle text-purple-500 mr-1"></i><strong>Tier ${tier}:</strong> ${info[tier]}`;
-}
-
-// ============ Actions ============
-function addMilestone() {
-  const c = document.getElementById('milestonesContainer'); if (!c) return;
-  const div = document.createElement('div'); div.className = 'flex gap-2';
-  div.innerHTML = `<input type="text" placeholder="Milestone title" class="milestone-title flex-1 px-3 py-2 border rounded-lg text-sm"><input type="number" placeholder="Amount EGP" class="milestone-amount w-32 px-3 py-2 border rounded-lg text-sm"><button type="button" onclick="this.parentElement.remove()" class="text-red-400 hover:text-red-600"><i class="fas fa-times"></i></button>`;
-  c.appendChild(div);
-}
-
-function toggleInvestorCap(val) {
-  const field = document.getElementById('investorCapField');
-  if (field) { field.classList.toggle('hidden', val !== 'limited'); }
-}
-
-function updateAiMinLabel() {
-  const goal = parseFloat(document.querySelector('[name=funding_goal]')?.value) || 0;
-  const cap = parseInt(document.querySelector('[name=investor_cap]')?.value) || 0;
-  const label = document.getElementById('aiMinLabel');
-  if (label && goal > 0 && cap > 0) {
-    const aiMin = Math.ceil(goal / (cap * 0.7));
-    label.innerHTML = `<i class="fas fa-robot text-purple-500 mr-1"></i>AI Min Investment: ${formatEGP(aiMin)} per investor (Rule #10)`;
+    el.innerHTML = `<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">${projects.map(renderProjectCard).join('')}</div>`;
+  } catch (e) {
+    el.innerHTML = '<p class="text-red-500 text-center py-8">Failed to load projects</p>';
   }
 }
 
-async function autoApproveKYC() {
-  try { await api('/api/auth/kyc/auto-approve', { method:'POST' }); const me = await api('/api/auth/me'); currentUser = me.user; navigate('dashboard'); showToast('KYC verified (demo)', 'success'); } catch (e) { showToast(e.message, 'error'); }
+function renderProjectCard(p) {
+  const pct = p.funding_goal > 0 ? Math.min(100, (p.funding_raised || 0) / p.funding_goal * 100) : 0;
+  return `<div class="bg-white rounded-2xl border border-slate-200 p-5 card-hover cursor-pointer" onclick="navigate('project-detail',{id:${p.id}})">
+    <div class="flex items-center justify-between mb-3">
+      ${tierBadge(p.tier || 'A')}
+      <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-${statusColor(p.status)}-100 text-${statusColor(p.status)}-700">${(p.status || 'draft').replace(/_/g,' ')}</span>
+    </div>
+    <h3 class="font-bold text-slate-800 mb-1 truncate">${p.title}</h3>
+    <p class="text-xs text-slate-500 mb-3">${p.sector || 'General'} — ${p.founder_name || 'Unknown'}</p>
+    <div class="flex items-end justify-between mb-2">
+      <div><div class="text-xs text-slate-400">Raised</div><div class="font-bold text-primary-600">${fEGP(p.funding_raised)}</div></div>
+      <div class="text-right"><div class="text-xs text-slate-400">Goal</div><div class="font-semibold text-slate-700">${fEGP(p.funding_goal)}</div></div>
+    </div>
+    <div class="w-full h-2 bg-slate-100 rounded-full"><div class="h-2 bg-primary-500 rounded-full progress-bar" style="width:${pct}%"></div></div>
+    <div class="flex items-center justify-between mt-3 text-xs text-slate-500">
+      <span><i class="fas fa-robot mr-1"></i>AI: ${p.ai_feasibility_score || '—'}/100</span>
+      <span><i class="fas fa-heart mr-1"></i>Health: ${p.health_score || '—'}</span>
+    </div>
+  </div>`;
 }
 
-async function investInProject(id) {
-  const amount = parseFloat(document.getElementById('investAmount')?.value);
-  if (!amount || amount < 50) { showToast('Minimum investment is 50 EGP', 'error'); return; }
-  try { const r = await api(`/api/projects/${id}/invest`, { method:'POST', body:JSON.stringify({ amount }) }); showToast(`Invested! ${r.equity_percentage}% equity, ${r.shares} shares. Transfer to law firm within 48h.`, 'success'); setTimeout(loadProjectDetail, 1000); } catch (e) { showToast(e.message, 'error'); }
+// ==========================================================================
+// PROJECT DETAIL
+// ==========================================================================
+function renderProjectDetail() {
+  return `<div class="fade-in" id="project-detail-content">
+    <div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-primary-500 text-2xl"></i></div>
+  </div>`;
 }
 
-async function expressInterest(id) {
-  const amount = parseFloat(document.getElementById('pledgeAmount')?.value)||0;
-  try { const r = await api(`/api/projects/${id}/interest`, { method:'POST', body:JSON.stringify({ pledge_amount: amount }) }); showToast(`Interest recorded! ${r.interest_votes} votes. ${r.threshold_met?'THRESHOLD MET!':''}`, 'success'); setTimeout(loadProjectDetail, 1000); } catch (e) { showToast(e.message, 'error'); }
+async function loadProjectDetail(id) {
+  const el = document.getElementById('project-detail-content');
+  if (!el) return;
+  try {
+    const data = await api(`/api/projects/${id}`);
+    const p = data.project;
+    if (!p) { el.innerHTML = '<p class="text-red-500">Project not found</p>'; return; }
+    
+    const pct = p.funding_goal > 0 ? Math.min(100, (p.funding_raised || 0) / p.funding_goal * 100) : 0;
+    el.innerHTML = `
+      <button onclick="navigate('projects')" class="text-sm text-slate-500 hover:text-primary-600 mb-4 inline-block"><i class="fas fa-arrow-left mr-1"></i>Back to Projects</button>
+      <div class="bg-white rounded-2xl border border-slate-200 p-6 mb-6">
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-6">
+          <div>
+            <div class="flex items-center gap-2 mb-2">${tierBadge(p.tier)} <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-${statusColor(p.status)}-100 text-${statusColor(p.status)}-700">${(p.status || '').replace(/_/g,' ')}</span></div>
+            <h1 class="text-2xl font-bold text-slate-800">${p.title}</h1>
+            ${p.title_ar ? `<h2 class="text-lg text-slate-600 ar-text">${p.title_ar}</h2>` : ''}
+            <p class="text-sm text-slate-500 mt-1">${p.sector} — by ${p.founder_name || 'Unknown'}</p>
+          </div>
+          <div class="flex gap-2">
+            ${p.status === 'live_fundraising' ? '<button class="btn-primary text-sm" onclick="showInvestModal()"><i class="fas fa-hand-holding-usd mr-1"></i>Invest</button>' : ''}
+            ${p.status === 'interest_phase' ? '<button class="btn-primary text-sm" onclick="expressInterest()"><i class="fas fa-heart mr-1"></i>Express Interest</button>' : ''}
+          </div>
+        </div>
+        <p class="text-sm text-slate-600 mb-6">${p.description || ''}</p>
+        <div class="mb-4">
+          <div class="flex justify-between text-sm mb-1">
+            <span class="font-semibold">${fEGP(p.funding_raised)} raised</span>
+            <span class="text-slate-500">of ${fEGP(p.funding_goal)}</span>
+          </div>
+          <div class="w-full h-3 bg-slate-100 rounded-full"><div class="h-3 bg-gradient-to-r from-primary-500 to-accent-500 rounded-full progress-bar" style="width:${pct}%"></div></div>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+          ${miniStat('AI Score', (p.ai_feasibility_score || '—') + '/100')}
+          ${miniStat('Valuation', fEGP(p.pre_money_valuation))}
+          ${miniStat('Min Investment', fEGP(p.min_investment || 50))}
+          ${miniStat('SHERKETI Fee', '2.5% + 2.5%')}
+        </div>
+      </div>
+      <div class="grid lg:grid-cols-3 gap-6">
+        <div class="bg-white rounded-2xl border border-slate-200 p-5">
+          <h3 class="font-bold text-slate-800 mb-3"><i class="fas fa-users mr-2 text-primary-500"></i>Shareholders (${(data.shareholders || []).length})</h3>
+          <div class="space-y-2 max-h-64 overflow-y-auto">${(data.shareholders || []).map(s => `
+            <div class="flex justify-between text-sm p-2 rounded-lg hover:bg-slate-50">
+              <span>${s.full_name || 'Anon'}</span>
+              <span class="font-semibold">${fPct(s.equity_percentage)}</span>
+            </div>`).join('')}</div>
+        </div>
+        <div class="bg-white rounded-2xl border border-slate-200 p-5">
+          <h3 class="font-bold text-slate-800 mb-3"><i class="fas fa-user-tie mr-2 text-emerald-500"></i>Board (${(data.board || []).length})</h3>
+          <div class="space-y-2">${(data.board || []).map(b => `
+            <div class="flex justify-between text-sm p-2 rounded-lg hover:bg-slate-50">
+              <span>${b.full_name || 'Member'} <span class="text-xs text-slate-400">(${b.role})</span></span>
+              ${b.has_veto ? '<span class="text-xs text-red-500 font-semibold">VETO</span>' : ''}
+            </div>`).join('')}</div>
+        </div>
+        <div class="bg-white rounded-2xl border border-slate-200 p-5">
+          <h3 class="font-bold text-slate-800 mb-3"><i class="fas fa-flag-checkered mr-2 text-amber-500"></i>Milestones</h3>
+          <div class="space-y-2">${(data.milestones || []).map(m => `
+            <div class="flex items-center gap-2 text-sm p-2">
+              <i class="fas ${m.status === 'completed' ? 'fa-check-circle text-emerald-500' : 'fa-circle text-slate-300'} text-xs"></i>
+              <span class="flex-1">${m.title}</span>
+              <span class="text-xs text-slate-400">${fEGP(m.tranche_amount)}</span>
+            </div>`).join('')}</div>
+        </div>
+      </div>
+      <div class="grid lg:grid-cols-2 gap-6 mt-6">
+        <div class="bg-white rounded-2xl border border-slate-200 p-5">
+          <h3 class="font-bold text-slate-800 mb-3"><i class="fas fa-history mr-2 text-indigo-500"></i>Governance Events</h3>
+          <div class="space-y-2 max-h-48 overflow-y-auto">${(data.governance_events || []).map(e => `
+            <div class="text-xs p-2 rounded-lg bg-slate-50"><span class="font-semibold">${e.event_type}</span> — ${e.actor_name || 'System'} <span class="text-slate-400 ml-1">${timeAgo(e.created_at)}</span></div>
+          `).join('')}</div>
+        </div>
+        <div class="bg-white rounded-2xl border border-slate-200 p-5">
+          <h3 class="font-bold text-slate-800 mb-3"><i class="fas fa-exclamation-triangle mr-2 text-red-500"></i>Risk Alerts</h3>
+          ${(data.risk_alerts || []).length === 0 ? '<p class="text-sm text-slate-400 text-center py-4">No active alerts</p>' :
+            `<div class="space-y-2">${(data.risk_alerts || []).map(a => `
+              <div class="text-xs p-2 rounded-lg border ${a.alert_level === 'red' ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50'}">
+                <span class="font-semibold">${a.title}</span>
+              </div>`).join('')}</div>`}
+        </div>
+      </div>`;
+  } catch (e) {
+    el.innerHTML = '<p class="text-red-500 text-center py-8">Failed to load project</p>';
+  }
 }
 
-async function castVote(voteId, decision) {
-  try { const r = await api(`/api/governance/votes/${voteId}/cast`, { method:'POST', body:JSON.stringify({ decision }) }); showToast(`Vote: ${decision}. Power: ${formatPercent(r.voting_power)}.${r.vetoed?' VETOED by SHERKETI!':''}${r.resolved?' Resolved!':''}`, r.vetoed?'error':'success'); setTimeout(loadDashboardData, 500); } catch (e) { showToast(e.message, 'error'); }
+function miniStat(label, value) {
+  return `<div class="p-3 rounded-xl bg-slate-50"><div class="text-xs text-slate-500">${label}</div><div class="font-bold text-sm text-slate-800">${value}</div></div>`;
 }
 
-async function buyShares(orderId) {
-  try { const r = await api(`/api/market/buy/${orderId}`, { method:'POST' }); showToast(r.message, 'success'); setTimeout(loadMarketData, 1000); } catch (e) { showToast(e.message, 'error'); }
+function showInvestModal() {
+  showModal('Invest in Project', `
+    <div class="space-y-4">
+      <div><label class="block text-sm font-medium text-slate-700 mb-1">Investment Amount (EGP)</label>
+        <input type="number" id="invest-amount" min="50" class="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" placeholder="Min 50 EGP">
+      </div>
+      <p class="text-xs text-slate-500">Funds will be held in law firm escrow. 48hr reservation.</p>
+    </div>`,
+    `<button onclick="closeModal()" class="btn-secondary text-sm">Cancel</button>
+     <button onclick="doInvest()" class="btn-primary text-sm"><i class="fas fa-check mr-1"></i>Confirm Investment</button>`
+  );
 }
 
-async function adminKYC(userId, action) {
-  try { await api(`/api/admin/users/${userId}/kyc`, { method:'POST', body:JSON.stringify({ action }) }); showToast(`User KYC ${action}d`, 'success'); setTimeout(() => loadAdminSection('users'), 500); } catch (e) { showToast(e.message, 'error'); }
+async function doInvest() {
+  const amount = parseFloat(document.getElementById('invest-amount')?.value);
+  if (!amount || amount < 50) return showToast('Minimum 50 EGP', 'error');
+  try {
+    const res = await api(`/api/projects/${pageParams.id}/invest`, { method: 'POST', body: JSON.stringify({ amount }) });
+    closeModal();
+    showToast(`Invested ${fEGP(amount)} — ${res.equity_percentage}% equity`);
+    loadProjectDetail(pageParams.id);
+  } catch (e) { showToast(e.error || 'Investment failed', 'error'); }
 }
 
-async function adminFreeze(projectId) {
-  const reason = prompt('Enter freeze reason:'); if (!reason) return;
-  try { await api(`/api/admin/projects/${projectId}/freeze`, { method:'POST', body:JSON.stringify({ reason }) }); showToast('Project frozen.', 'success'); setTimeout(() => loadAdminSection('projects'), 500); } catch (e) { showToast(e.message, 'error'); }
+async function expressInterest() {
+  try {
+    const res = await api(`/api/projects/${pageParams.id}/interest`, { method: 'POST', body: JSON.stringify({ pledge_amount: 1000 }) });
+    showToast(res.message || 'Interest recorded');
+  } catch (e) { showToast(e.error || 'Failed', 'error'); }
+}
+
+// ==========================================================================
+// CREATE PROJECT
+// ==========================================================================
+function renderCreateProject() {
+  return `<div class="fade-in max-w-2xl mx-auto">
+    <button onclick="navigate('projects')" class="text-sm text-slate-500 hover:text-primary-600 mb-4 inline-block"><i class="fas fa-arrow-left mr-1"></i>Back</button>
+    <div class="bg-white rounded-2xl border border-slate-200 p-6">
+      <h2 class="text-xl font-bold text-slate-800 mb-6"><i class="fas fa-plus-circle mr-2 text-primary-500"></i>Create Project</h2>
+      <form id="create-project-form" class="space-y-4">
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="block text-sm font-medium text-slate-700 mb-1">Title (EN)*</label><input type="text" id="cp-title" required class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm"></div>
+          <div><label class="block text-sm font-medium text-slate-700 mb-1">Title (AR)</label><input type="text" id="cp-title-ar" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm ar-text"></div>
+        </div>
+        <div><label class="block text-sm font-medium text-slate-700 mb-1">Description*</label><textarea id="cp-desc" required rows="3" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm"></textarea></div>
+        <div class="grid grid-cols-3 gap-3">
+          <div><label class="block text-sm font-medium text-slate-700 mb-1">Sector*</label>
+            <select id="cp-sector" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm">
+              ${['Technology','FinTech','Green Energy','Healthcare','Food & Beverage','Real Estate','Education','E-Commerce','Manufacturing','Agriculture','Logistics','Other'].map(s => `<option>${s}</option>`).join('')}
+            </select>
+          </div>
+          <div><label class="block text-sm font-medium text-slate-700 mb-1">Tier*</label>
+            <select id="cp-tier" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm">
+              <option value="A">Tier A (max 3M)</option><option value="B">Tier B (max 25M)</option>
+              <option value="C">Tier C (unlimited)</option><option value="D">Tier D (unlimited)</option>
+            </select>
+          </div>
+          <div><label class="block text-sm font-medium text-slate-700 mb-1">Funding Goal (EGP)*</label><input type="number" id="cp-goal" required class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm"></div>
+        </div>
+        <div><label class="block text-sm font-medium text-slate-700 mb-1">Equity Offered (%)*</label><input type="number" id="cp-equity" required min="1" max="100" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm"></div>
+        <div class="bg-primary-50 border border-primary-100 rounded-xl p-4 text-xs text-primary-700">
+          <strong>SHERKETI Fee (All Tiers):</strong> 2.5% cash commission + 2.5% equity stake + 5yr board seat with veto
+        </div>
+        <button type="submit" class="btn-primary w-full py-3 text-sm"><i class="fas fa-paper-plane mr-2"></i>Create & Submit for AI Review</button>
+      </form>
+    </div>
+  </div>`;
+}
+
+// ==========================================================================
+// SECONDARY MARKET
+// ==========================================================================
+function renderMarket() {
+  return `<div class="fade-in">
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold text-slate-800"><i class="fas fa-chart-line mr-2"></i>Secondary Market</h1>
+      <button onclick="showSellModal()" class="btn-primary text-sm"><i class="fas fa-tag mr-1"></i>Sell Shares</button>
+    </div>
+    <div id="market-content"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-primary-500 text-2xl"></i></div></div>
+  </div>`;
+}
+
+async function loadMarket() {
+  const el = document.getElementById('market-content');
+  if (!el) return;
+  try {
+    const data = await api('/api/market/orders');
+    const orders = data.orders || [];
+    el.innerHTML = orders.length === 0 ? '<p class="text-slate-400 text-center py-16">No market orders</p>' :
+      `<div class="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <table class="w-full text-sm">
+          <thead><tr class="bg-slate-50 text-left text-xs text-slate-500"><th class="px-4 py-3">Project</th><th>Seller</th><th>Shares</th><th>Price/Share</th><th>Status</th><th>Priority End</th><th></th></tr></thead>
+          <tbody>${orders.map(o => `
+            <tr class="border-t border-slate-100 hover:bg-slate-50">
+              <td class="px-4 py-3 font-semibold">${o.project_title || '#' + o.project_id}</td>
+              <td>${o.seller_name || 'Anon'}</td>
+              <td>${o.shares_count}</td>
+              <td>${fEGP(o.ask_price)}</td>
+              <td><span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-${statusColor(o.status)}-100 text-${statusColor(o.status)}-700">${o.status}</span></td>
+              <td class="text-xs text-slate-400">${fTime(o.priority_window_end)}</td>
+              <td>${o.status !== 'completed' ? `<button onclick="buyOrder(${o.id})" class="text-xs text-primary-600 font-semibold hover:underline">Buy</button>` : ''}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch (e) { el.innerHTML = '<p class="text-red-500 text-center py-8">Failed to load market</p>'; }
+}
+
+function showSellModal() {
+  showModal('Sell Shares', `
+    <div class="space-y-3">
+      <div><label class="block text-sm font-medium mb-1">Project ID</label><input type="number" id="sell-pid" class="w-full px-3 py-2 rounded-xl border text-sm"></div>
+      <div><label class="block text-sm font-medium mb-1">Shares Count</label><input type="number" id="sell-shares" class="w-full px-3 py-2 rounded-xl border text-sm"></div>
+      <div><label class="block text-sm font-medium mb-1">Ask Price (EGP/share)</label><input type="number" id="sell-price" class="w-full px-3 py-2 rounded-xl border text-sm"></div>
+    </div>`,
+    `<button onclick="closeModal()" class="btn-secondary text-sm">Cancel</button><button onclick="doSell()" class="btn-primary text-sm">List Shares</button>`);
+}
+
+async function doSell() {
+  try {
+    await api('/api/market/sell', { method: 'POST', body: JSON.stringify({
+      project_id: +document.getElementById('sell-pid').value,
+      shares_count: +document.getElementById('sell-shares').value,
+      ask_price: +document.getElementById('sell-price').value
+    })});
+    closeModal(); showToast('Sell order created'); loadMarket();
+  } catch (e) { showToast(e.error || 'Failed', 'error'); }
+}
+
+async function buyOrder(id) {
+  try {
+    await api(`/api/market/buy/${id}`, { method: 'POST' });
+    showToast('Buy order placed'); loadMarket();
+  } catch (e) { showToast(e.error || 'Failed', 'error'); }
+}
+
+// ==========================================================================
+// GOVERNANCE
+// ==========================================================================
+function renderGovernance() {
+  return `<div class="fade-in">
+    <h1 class="text-2xl font-bold text-slate-800 mb-6"><i class="fas fa-gavel mr-2"></i>Governance</h1>
+    <div class="grid lg:grid-cols-2 gap-6">
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h3 class="font-bold text-slate-800 mb-4">Active Votes</h3>
+        <div id="governance-votes"><div class="text-center py-8 text-slate-400"><i class="fas fa-spinner fa-spin"></i></div></div>
+      </div>
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h3 class="font-bold text-slate-800 mb-4">Actions</h3>
+        <div class="space-y-2">
+          <button onclick="showCreateVoteModal()" class="w-full btn-secondary text-sm text-left"><i class="fas fa-plus mr-2"></i>Create Proposal</button>
+          <button onclick="processExpiredVotes()" class="w-full btn-secondary text-sm text-left"><i class="fas fa-clock mr-2"></i>Process Expired Votes</button>
+          <button onclick="checkJozourTerms()" class="w-full btn-secondary text-sm text-left"><i class="fas fa-sync mr-2"></i>Check SHERKETI Terms</button>
+          <button onclick="showDisputeModal()" class="w-full btn-secondary text-sm text-left"><i class="fas fa-exclamation-circle mr-2"></i>File Dispute</button>
+          <button onclick="showEmergencyRecall()" class="w-full btn-secondary text-sm text-left text-red-600"><i class="fas fa-bolt mr-2"></i>Emergency Capital Recall</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function loadGovernanceVotes() {
+  const el = document.getElementById('governance-votes');
+  if (!el) return;
+  try {
+    const data = await api('/api/governance/notifications');
+    el.innerHTML = '<p class="text-xs text-slate-500 text-center py-4">Use project detail for vote-specific data</p>';
+  } catch { el.innerHTML = '<p class="text-slate-400 text-sm text-center py-4">No data</p>'; }
+}
+
+function showCreateVoteModal() {
+  showModal('Create Proposal', `
+    <div class="space-y-3">
+      <div><label class="block text-sm font-medium mb-1">Project ID</label><input type="number" id="vote-pid" class="w-full px-3 py-2 rounded-xl border text-sm"></div>
+      <div><label class="block text-sm font-medium mb-1">Title</label><input type="text" id="vote-title" class="w-full px-3 py-2 rounded-xl border text-sm"></div>
+      <div><label class="block text-sm font-medium mb-1">Description</label><textarea id="vote-desc" rows="2" class="w-full px-3 py-2 rounded-xl border text-sm"></textarea></div>
+      <div><label class="block text-sm font-medium mb-1">Type</label><select id="vote-type" class="w-full px-3 py-2 rounded-xl border text-sm">
+        <option value="board_resolution">Board Resolution</option><option value="milestone_release">Milestone Release</option>
+        <option value="constitutional_amendment">Constitutional Amendment</option><option value="manager_removal">Manager Removal</option>
+      </select></div>
+    </div>`,
+    `<button onclick="closeModal()" class="btn-secondary text-sm">Cancel</button><button onclick="doCreateVote()" class="btn-primary text-sm">Create Vote</button>`);
+}
+
+async function doCreateVote() {
+  try {
+    await api('/api/governance/votes', { method: 'POST', body: JSON.stringify({
+      project_id: +document.getElementById('vote-pid').value,
+      title: document.getElementById('vote-title').value,
+      description: document.getElementById('vote-desc').value,
+      vote_type: document.getElementById('vote-type').value
+    })});
+    closeModal(); showToast('Proposal created');
+  } catch (e) { showToast(e.error || 'Failed', 'error'); }
+}
+
+async function processExpiredVotes() {
+  try {
+    const res = await api('/api/governance/process-expired-votes', { method: 'POST' });
+    showToast(`Processed ${res.processed_count} expired votes`);
+  } catch (e) { showToast(e.error || 'Failed', 'error'); }
 }
 
 async function checkJozourTerms() {
-  try { const r = await api('/api/governance/check-jozour-terms', { method:'POST' }); const c = document.getElementById('termCheckResult');
-    if (c) c.innerHTML = `<div class="p-3 ${r.triggered>0?'bg-amber-50 border-amber-200':'bg-emerald-50 border-emerald-200'} border rounded-lg text-sm">${r.triggered>0?`<i class="fas fa-exclamation-triangle text-amber-500 mr-1"></i>${r.triggered} retention vote(s) triggered!`:'<i class="fas fa-check-circle text-emerald-500 mr-1"></i>No expiring terms found.'}</div>`;
-  } catch (e) { showToast(e.message, 'error'); }
+  try {
+    const res = await api('/api/governance/check-jozour-terms', { method: 'POST' });
+    showToast(`Triggered ${res.triggered} renewal votes`);
+  } catch (e) { showToast(e.error || 'Failed', 'error'); }
 }
 
-async function markRead(id) {
-  try { await api(`/api/governance/notifications/${id}/read`, { method:'POST' }); loadNotifications(); } catch {}
-}
-async function markAllRead() {
-  try { await api('/api/governance/notifications/read-all', { method:'POST' }); loadNotifications(); showToast('All notifications marked as read', 'success'); } catch {}
-}
-
-function logout() { currentUser = null; currentToken = null; localStorage.removeItem('sherketi_token'); navigate('landing'); }
-
-function showToast(message, type = 'info') {
-  const toast = document.createElement('div');
-  toast.className = `fixed bottom-4 right-4 z-50 px-6 py-3 rounded-xl shadow-2xl text-white font-medium text-sm fade-in max-w-md ${type==='success'?'bg-emerald-600':type==='error'?'bg-red-600':'bg-blue-600'}`;
-  toast.innerHTML = `<i class="fas ${type==='success'?'fa-check-circle':type==='error'?'fa-exclamation-circle':'fa-info-circle'} mr-2"></i>${message}`;
-  document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 5000);
+function showDisputeModal() {
+  showModal('File Dispute', `
+    <div class="space-y-3">
+      <div><label class="block text-sm font-medium mb-1">Project ID</label><input type="number" id="disp-pid" class="w-full px-3 py-2 rounded-xl border text-sm"></div>
+      <div><label class="block text-sm font-medium mb-1">Dispute Type</label><select id="disp-type" class="w-full px-3 py-2 rounded-xl border text-sm">
+        <option value="financial">Financial</option><option value="governance">Governance</option><option value="operational">Operational</option><option value="fraud">Fraud</option>
+      </select></div>
+      <div><label class="block text-sm font-medium mb-1">Description</label><textarea id="disp-desc" rows="3" class="w-full px-3 py-2 rounded-xl border text-sm"></textarea></div>
+    </div>`,
+    `<button onclick="closeModal()" class="btn-secondary text-sm">Cancel</button><button onclick="doFileDispute()" class="btn-danger text-sm">File Dispute</button>`);
 }
 
-// Init
+async function doFileDispute() {
+  try {
+    await api('/api/governance/disputes', { method: 'POST', body: JSON.stringify({
+      project_id: +document.getElementById('disp-pid').value,
+      dispute_type: document.getElementById('disp-type').value,
+      description: document.getElementById('disp-desc').value
+    })});
+    closeModal(); showToast('Dispute filed — 48hr AI mediation');
+  } catch (e) { showToast(e.error || 'Failed', 'error'); }
+}
+
+function showEmergencyRecall() {
+  showModal('Emergency Capital Recall', `
+    <div class="bg-red-50 border border-red-200 rounded-xl p-3 mb-4 text-xs text-red-700"><i class="fas fa-exclamation-triangle mr-1"></i>This will freeze all pending escrow and trigger a 72hr shareholder vote.</div>
+    <div class="space-y-3">
+      <div><label class="block text-sm font-medium mb-1">Project ID</label><input type="number" id="recall-pid" class="w-full px-3 py-2 rounded-xl border text-sm"></div>
+      <div><label class="block text-sm font-medium mb-1">Reason</label><textarea id="recall-reason" rows="2" class="w-full px-3 py-2 rounded-xl border text-sm"></textarea></div>
+    </div>`,
+    `<button onclick="closeModal()" class="btn-secondary text-sm">Cancel</button><button onclick="doEmergencyRecall()" class="btn-danger text-sm">Initiate Recall</button>`);
+}
+
+async function doEmergencyRecall() {
+  try {
+    await api('/api/governance/emergency-recall', { method: 'POST', body: JSON.stringify({
+      project_id: +document.getElementById('recall-pid').value,
+      reason: document.getElementById('recall-reason').value
+    })});
+    closeModal(); showToast('Emergency recall initiated', 'warning');
+  } catch (e) { showToast(e.error || 'Failed', 'error'); }
+}
+
+// ==========================================================================
+// CONSTITUTION
+// ==========================================================================
+function renderConstitution() {
+  return `<div class="fade-in">
+    <h1 class="text-2xl font-bold text-slate-800 mb-6"><i class="fas fa-scroll mr-2"></i>Constitution</h1>
+    <div id="constitution-content"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-primary-500 text-2xl"></i></div></div>
+  </div>`;
+}
+
+async function loadConstitution() {
+  const el = document.getElementById('constitution-content');
+  if (!el) return;
+  try {
+    const data = await api('/api/constitution/rules');
+    const rules = data.rules || [];
+    el.innerHTML = `<div class="space-y-4">${rules.map((r, i) => `
+      <div class="bg-white rounded-2xl border border-slate-200 p-5 card-hover">
+        <div class="flex items-center gap-3 mb-2">
+          <div class="w-8 h-8 rounded-lg bg-primary-100 text-primary-700 flex items-center justify-center font-bold text-sm">${i + 1}</div>
+          <h3 class="font-bold text-slate-800">${r.title || 'Rule ' + (i+1)}</h3>
+        </div>
+        <p class="text-sm text-slate-600">${r.description || r.content || JSON.stringify(r)}</p>
+      </div>`).join('')}</div>`;
+  } catch { el.innerHTML = '<p class="text-slate-400 text-center py-8">Failed to load constitution</p>'; }
+}
+
+// ==========================================================================
+// AI TOOLS
+// ==========================================================================
+function renderAITools() {
+  return `<div class="fade-in">
+    <h1 class="text-2xl font-bold text-slate-800 mb-6"><i class="fas fa-robot mr-2"></i>AI Tools</h1>
+    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      ${aiToolCard('fa-search-dollar', 'Feasibility Analysis', 'AI scores your business proposal 0-100', 'feasibility')}
+      ${aiToolCard('fa-calculator', 'Valuation Engine', 'SHERKETI valuation v3 with sector multipliers', 'valuation')}
+      ${aiToolCard('fa-money-check-alt', 'Salary Calculator', 'AI-calculated salary based on role & tier', 'salary')}
+      ${aiToolCard('fa-star', 'Reputation Score', 'Calculate reputation for any user type', 'reputation')}
+      ${aiToolCard('fa-shield-alt', 'Risk Assessment', 'AI risk prediction for projects', 'risk')}
+      ${aiToolCard('fa-chart-bar', 'Fundamental Pricing', 'AI share pricing (Rule #9)', 'pricing')}
+      ${aiToolCard('fa-receipt', 'Tax Calculator', 'Egyptian tax calculation (CG/Dividend/VAT)', 'tax')}
+    </div>
+    <div id="ai-result" class="mt-6"></div>
+  </div>`;
+}
+
+function aiToolCard(icon, title, desc, tool) {
+  return `<div class="bg-white rounded-2xl border border-slate-200 p-5 card-hover cursor-pointer" onclick="showAITool('${tool}')">
+    <div class="w-10 h-10 rounded-xl bg-accent-100 flex items-center justify-center mb-3"><i class="fas ${icon} text-accent-600"></i></div>
+    <h3 class="font-bold text-sm text-slate-800 mb-1">${title}</h3>
+    <p class="text-xs text-slate-500">${desc}</p>
+  </div>`;
+}
+
+function showAITool(tool) {
+  const forms = {
+    feasibility: `<div class="space-y-3">
+      <input type="text" id="ai-title" placeholder="Project Title" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <textarea id="ai-desc" placeholder="Description" rows="2" class="w-full px-3 py-2 rounded-xl border text-sm"></textarea>
+      <select id="ai-sector" class="w-full px-3 py-2 rounded-xl border text-sm">${['Technology','FinTech','Green Energy','Healthcare','Food & Beverage'].map(s => `<option>${s}</option>`).join('')}</select>
+      <input type="number" id="ai-goal" placeholder="Funding Goal (EGP)" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <select id="ai-tier" class="w-full px-3 py-2 rounded-xl border text-sm"><option>A</option><option>B</option><option>C</option><option>D</option></select>
+      <button onclick="runAIFeasibility()" class="btn-primary w-full text-sm">Run Analysis</button>
+    </div>`,
+    valuation: `<div class="space-y-3">
+      <input type="number" id="ai-val-goal" placeholder="Funding Goal (EGP)" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <select id="ai-val-sector" class="w-full px-3 py-2 rounded-xl border text-sm">${['Technology','FinTech','Green Energy','Healthcare','Food & Beverage'].map(s => `<option>${s}</option>`).join('')}</select>
+      <select id="ai-val-tier" class="w-full px-3 py-2 rounded-xl border text-sm"><option>A</option><option>B</option><option>C</option><option>D</option></select>
+      <input type="number" id="ai-val-score" placeholder="Feasibility Score" value="70" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <button onclick="runAIValuation()" class="btn-primary w-full text-sm">Calculate Valuation</button>
+    </div>`,
+    salary: `<div class="space-y-3">
+      <select id="ai-sal-pos" class="w-full px-3 py-2 rounded-xl border text-sm">${['CEO/Founder','CTO','CFO','Manager','Senior Developer','Developer','Marketing Manager'].map(s => `<option>${s}</option>`).join('')}</select>
+      <select id="ai-sal-tier" class="w-full px-3 py-2 rounded-xl border text-sm"><option>A</option><option>B</option><option>C</option><option>D</option></select>
+      <input type="number" id="ai-sal-perf" placeholder="Milestone Achievement %" value="70" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <select id="ai-sal-region" class="w-full px-3 py-2 rounded-xl border text-sm"><option value="cairo">Cairo</option><option value="alexandria">Alexandria</option><option value="suez_canal">Suez Canal</option></select>
+      <button onclick="runAISalary()" class="btn-primary w-full text-sm">Calculate Salary</button>
+    </div>`,
+    tax: `<div class="space-y-3">
+      <input type="number" id="ai-tax-amt" placeholder="Amount (EGP)" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <select id="ai-tax-type" class="w-full px-3 py-2 rounded-xl border text-sm"><option value="capital_gains">Capital Gains</option><option value="dividend_withholding">Dividend Withholding</option><option value="vat">VAT</option></select>
+      <select id="ai-tax-entity" class="w-full px-3 py-2 rounded-xl border text-sm"><option value="individual">Individual</option><option value="company">Company</option></select>
+      <button onclick="runAITax()" class="btn-primary w-full text-sm">Calculate Tax</button>
+    </div>`,
+    reputation: `<div class="space-y-3">
+      <select id="ai-rep-type" class="w-full px-3 py-2 rounded-xl border text-sm"><option value="investor">Investor</option><option value="founder">Founder</option><option value="board_member">Board Member</option></select>
+      <p class="text-xs text-slate-500">Uses default metrics (50) for demo</p>
+      <button onclick="runAIReputation()" class="btn-primary w-full text-sm">Calculate Reputation</button>
+    </div>`,
+    risk: `<div class="space-y-3">
+      <input type="number" id="ai-risk-pid" placeholder="Project ID" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <button onclick="runAIRisk()" class="btn-primary w-full text-sm">Run Risk Assessment</button>
+    </div>`,
+    pricing: `<div class="space-y-3">
+      <input type="number" id="ai-fp-eps" placeholder="EPS (Earnings Per Share)" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <input type="number" id="ai-fp-nav" placeholder="NAV per share" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <select id="ai-fp-sector" class="w-full px-3 py-2 rounded-xl border text-sm">${['Technology','FinTech','Food & Beverage','Real Estate'].map(s => `<option>${s}</option>`).join('')}</select>
+      <input type="number" id="ai-fp-growth" placeholder="Growth Rate %" value="20" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <button onclick="runAIPricing()" class="btn-primary w-full text-sm">Calculate Price</button>
+    </div>`
+  };
+  const el = document.getElementById('ai-result');
+  if (el) el.innerHTML = `<div class="bg-white rounded-2xl border border-slate-200 p-5 fade-in"><h3 class="font-bold text-slate-800 mb-4">${tool.charAt(0).toUpperCase() + tool.slice(1)} Tool</h3>${forms[tool] || '<p>Coming soon</p>'}<div id="ai-output" class="mt-4"></div></div>`;
+}
+
+async function runAIFeasibility() { await runAI('/api/ai/feasibility', { title: gv('ai-title'), description: gv('ai-desc'), sector: gv('ai-sector'), funding_goal: +gv('ai-goal'), tier: gv('ai-tier') }); }
+async function runAIValuation() { await runAI('/api/ai/valuation', { funding_goal: +gv('ai-val-goal'), sector: gv('ai-val-sector'), tier: gv('ai-val-tier'), feasibility_score: +gv('ai-val-score') }); }
+async function runAISalary() { await runAI('/api/ai/salary', { position: gv('ai-sal-pos'), tier: gv('ai-sal-tier'), milestone_achievement: +gv('ai-sal-perf'), region: gv('ai-sal-region') }); }
+async function runAITax() { await runAI('/api/ai/tax-calculate', { amount: +gv('ai-tax-amt'), tax_type: gv('ai-tax-type'), entity_type: gv('ai-tax-entity') }); }
+async function runAIReputation() { await runAI('/api/ai/reputation', { user_type: gv('ai-rep-type'), metrics: { commitment_fulfillment: 70, payment_timeliness: 80, governance_participation: 60, project_profitability: 65, governance_compliance: 75, financial_transparency: 70, participation_quorum: 80, voting_quality: 70, dispute_resolution: 65, holding_period: 50, investment_diversity: 60, feedback_quality: 55, multiple_projects: 40, investor_satisfaction: 70, long_term_commitment: 65, strategic_contributions: 60, compliance_timeliness: 75 } }); }
+async function runAIRisk() { await runAI('/api/ai/risk-assessment', { project_id: +gv('ai-risk-pid') }); }
+async function runAIPricing() { await runAI('/api/ai/fundamental-price', { eps: +gv('ai-fp-eps'), nav_per_share: +gv('ai-fp-nav'), sector: gv('ai-fp-sector'), growth_rate: +gv('ai-fp-growth') }); }
+
+function gv(id) { return document.getElementById(id)?.value || ''; }
+
+async function runAI(endpoint, body) {
+  const el = document.getElementById('ai-output');
+  if (el) el.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-primary-500"></i> Analyzing...</div>';
+  try {
+    const data = await api(endpoint, { method: 'POST', body: JSON.stringify(body) });
+    if (el) el.innerHTML = `<div class="bg-slate-50 rounded-xl p-4"><pre class="text-xs overflow-x-auto whitespace-pre-wrap">${JSON.stringify(data, null, 2)}</pre></div>`;
+  } catch (e) {
+    if (el) el.innerHTML = `<div class="bg-red-50 rounded-xl p-4 text-red-600 text-sm">${e.error || 'AI analysis failed'}</div>`;
+  }
+}
+
+// ==========================================================================
+// FINANCIAL
+// ==========================================================================
+function renderFinancial() {
+  return `<div class="fade-in">
+    <h1 class="text-2xl font-bold text-slate-800 mb-6"><i class="fas fa-money-bill-wave mr-2"></i>Financial</h1>
+    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+      <div class="bg-white rounded-2xl border border-slate-200 p-5 card-hover cursor-pointer" onclick="showFinancialTool('report')">
+        <i class="fas fa-file-invoice-dollar text-primary-500 text-2xl mb-3"></i>
+        <h3 class="font-bold text-sm">Generate Report</h3>
+        <p class="text-xs text-slate-500">Financial report for a project</p>
+      </div>
+      <div class="bg-white rounded-2xl border border-slate-200 p-5 card-hover cursor-pointer" onclick="showFinancialTool('dividend')">
+        <i class="fas fa-hand-holding-usd text-emerald-500 text-2xl mb-3"></i>
+        <h3 class="font-bold text-sm">Distribute Dividends</h3>
+        <p class="text-xs text-slate-500">With 10% withholding tax</p>
+      </div>
+      <div class="bg-white rounded-2xl border border-slate-200 p-5 card-hover cursor-pointer" onclick="showFinancialTool('dashboard')">
+        <i class="fas fa-tachometer-alt text-amber-500 text-2xl mb-3"></i>
+        <h3 class="font-bold text-sm">Financial Dashboard</h3>
+        <p class="text-xs text-slate-500">Real-time project metrics</p>
+      </div>
+    </div>
+    <div id="financial-result"></div>
+  </div>`;
+}
+
+function showFinancialTool(tool) {
+  const el = document.getElementById('financial-result');
+  if (!el) return;
+  const forms = {
+    report: `<div class="space-y-3">
+      <input type="number" id="fin-pid" placeholder="Project ID" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <select id="fin-period" class="w-full px-3 py-2 rounded-xl border text-sm"><option value="quarterly">Quarterly</option><option value="semi_annual">Semi-Annual</option><option value="annual">Annual</option></select>
+      <button onclick="runFinReport()" class="btn-primary w-full text-sm">Generate Report</button></div>`,
+    dividend: `<div class="space-y-3">
+      <input type="number" id="div-pid" placeholder="Project ID" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <input type="number" id="div-amt" placeholder="Total Dividend (EGP)" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <input type="text" id="div-period" placeholder="Period (e.g. Q1 2026)" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <button onclick="runDividend()" class="btn-primary w-full text-sm">Distribute</button></div>`,
+    dashboard: `<div class="space-y-3">
+      <input type="number" id="fdash-pid" placeholder="Project ID" class="w-full px-3 py-2 rounded-xl border text-sm">
+      <button onclick="runFinDash()" class="btn-primary w-full text-sm">Load Dashboard</button></div>`
+  };
+  el.innerHTML = `<div class="bg-white rounded-2xl border border-slate-200 p-5 fade-in">${forms[tool]}<div id="fin-output" class="mt-4"></div></div>`;
+}
+
+async function runFinReport() { await runAI('/api/financial/report/generate', { project_id: +gv('fin-pid'), period_type: gv('fin-period') }); }
+async function runDividend() { await runAI('/api/financial/dividend/distribute', { project_id: +gv('div-pid'), total_amount: +gv('div-amt'), period: gv('div-period') }); }
+async function runFinDash() {
+  const el = document.getElementById('ai-output') || document.getElementById('fin-output');
+  if (el) el.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-primary-500"></i></div>';
+  try {
+    const data = await api(`/api/financial/dashboard/${gv('fdash-pid')}`);
+    if (el) el.innerHTML = `<div class="bg-slate-50 rounded-xl p-4"><pre class="text-xs overflow-x-auto whitespace-pre-wrap">${JSON.stringify(data, null, 2)}</pre></div>`;
+  } catch (e) { if (el) el.innerHTML = `<div class="text-red-500 text-sm">${e.error || 'Failed'}</div>`; }
+}
+
+// ==========================================================================
+// BOARD OPERATIONS
+// ==========================================================================
+function renderBoardOps() {
+  return `<div class="fade-in">
+    <h1 class="text-2xl font-bold text-slate-800 mb-6"><i class="fas fa-users-cog mr-2"></i>Board Operations</h1>
+    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      ${[
+        { icon:'fa-calendar-alt', title:'Meetings', fn:'meetings' },
+        { icon:'fa-star', title:'Performance', fn:'performance' },
+        { icon:'fa-file-contract', title:'Contracts', fn:'contracts' },
+        { icon:'fa-globe', title:'Reputation', fn:'reputation' },
+        { icon:'fa-exclamation-triangle', title:'Early Warning', fn:'warning' },
+        { icon:'fa-exchange-alt', title:'Equity Conversion', fn:'equity' },
+        { icon:'fa-balance-scale', title:'Dispute Prediction', fn:'dispute' },
+        { icon:'fa-chart-pie', title:'Market Intelligence', fn:'market' }
+      ].map(t => `<div class="bg-white rounded-2xl border border-slate-200 p-4 card-hover cursor-pointer" onclick="showBoardTool('${t.fn}')">
+        <i class="fas ${t.icon} text-primary-500 text-lg mb-2"></i>
+        <h3 class="font-bold text-xs">${t.title}</h3>
+      </div>`).join('')}
+    </div>
+    <div id="board-result"></div>
+  </div>`;
+}
+
+function showBoardTool(tool) {
+  const el = document.getElementById('board-result');
+  if (!el) return;
+  const pid = `<input type="number" id="bo-pid" placeholder="Project ID" class="w-full px-3 py-2 rounded-xl border text-sm mb-3">`;
+  const toolForms = {
+    meetings: `${pid}<button onclick="runBoardOp('/api/board-ops/meetings/' + gv('bo-pid'), 'GET')" class="btn-primary w-full text-sm mb-2">View Meetings</button>
+      <button onclick="runBoardOp('/api/board-ops/meetings/schedule', 'POST', { project_id: +gv('bo-pid'), meeting_type: 'quarterly' })" class="btn-secondary w-full text-sm">Schedule Meeting</button>`,
+    performance: `${pid}<button onclick="runBoardOp('/api/board-ops/performance-evaluation', 'POST', { project_id: +gv('bo-pid') })" class="btn-primary w-full text-sm">Run Evaluation</button>`,
+    contracts: `${pid}<input type="text" id="bo-contract" placeholder="Contract Title" class="w-full px-3 py-2 rounded-xl border text-sm mb-3">
+      <input type="number" id="bo-cvalue" placeholder="Value (EGP)" class="w-full px-3 py-2 rounded-xl border text-sm mb-3">
+      <button onclick="runBoardOp('/api/board-ops/contract/review', 'POST', { project_id: +gv('bo-pid'), contract_title: gv('bo-contract'), contract_value: +gv('bo-cvalue'), duration_months: 12 })" class="btn-primary w-full text-sm">Review Contract</button>`,
+    reputation: `<input type="number" id="bo-uid" placeholder="User ID" class="w-full px-3 py-2 rounded-xl border text-sm mb-3">
+      <button onclick="runBoardOp('/api/board-ops/reputation/global', 'POST', { user_id: +gv('bo-uid') })" class="btn-primary w-full text-sm">Calculate</button>`,
+    warning: `${pid}<button onclick="runBoardOp('/api/board-ops/early-warning', 'POST', { project_id: +gv('bo-pid') })" class="btn-primary w-full text-sm">Scan</button>`,
+    equity: `${pid}<input type="number" id="bo-emp" placeholder="Employee User ID" class="w-full px-3 py-2 rounded-xl border text-sm mb-3">
+      <input type="number" id="bo-sal" placeholder="Monthly Salary" class="w-full px-3 py-2 rounded-xl border text-sm mb-3">
+      <input type="number" id="bo-convpct" placeholder="Conversion % (max 10)" value="5" class="w-full px-3 py-2 rounded-xl border text-sm mb-3">
+      <button onclick="runBoardOp('/api/board-ops/employee-equity-conversion', 'POST', { project_id: +gv('bo-pid'), employee_id: +gv('bo-emp'), current_salary: +gv('bo-sal'), conversion_percentage: +gv('bo-convpct') })" class="btn-primary w-full text-sm">Convert</button>`,
+    dispute: `${pid}<button onclick="runBoardOp('/api/board-ops/dispute-prediction', 'POST', { project_id: +gv('bo-pid') })" class="btn-primary w-full text-sm">Predict</button>`,
+    market: `${pid}<button onclick="runBoardOp('/api/board-ops/market-intelligence', 'POST', { project_id: +gv('bo-pid') })" class="btn-primary w-full text-sm">Analyze</button>`
+  };
+  el.innerHTML = `<div class="bg-white rounded-2xl border border-slate-200 p-5 fade-in max-w-lg">${toolForms[tool] || 'Coming soon'}<div id="bo-output" class="mt-4"></div></div>`;
+}
+
+async function runBoardOp(endpoint, method, body) {
+  const el = document.getElementById('bo-output');
+  if (el) el.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-primary-500"></i></div>';
+  try {
+    const opts = { method };
+    if (body) opts.body = JSON.stringify(body);
+    const data = await api(endpoint, opts);
+    if (el) el.innerHTML = `<div class="bg-slate-50 rounded-xl p-4"><pre class="text-xs overflow-x-auto whitespace-pre-wrap">${JSON.stringify(data, null, 2)}</pre></div>`;
+  } catch (e) { if (el) el.innerHTML = `<div class="text-red-500 text-sm">${e.error || 'Failed'}</div>`; }
+}
+
+// ==========================================================================
+// ADD-ONS
+// ==========================================================================
+function renderAddons() {
+  return `<div class="fade-in">
+    <h1 class="text-2xl font-bold text-slate-800 mb-6"><i class="fas fa-puzzle-piece mr-2"></i>Add-ons</h1>
+    <div id="addons-content"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-primary-500 text-2xl"></i></div></div>
+  </div>`;
+}
+
+async function loadAddons() {
+  const el = document.getElementById('addons-content');
+  if (!el) return;
+  try {
+    const data = await api('/api/addons');
+    const addons = data.addons || [];
+    el.innerHTML = `<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">${addons.map(a => `
+      <div class="bg-white rounded-2xl border border-slate-200 p-5 card-hover">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-bold text-primary-600">#${a.id}</span>
+          <span class="text-xs px-2 py-0.5 rounded-full ${a.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}">${a.enabled ? 'Active' : 'Inactive'}</span>
+        </div>
+        <h3 class="font-bold text-sm text-slate-800 mb-1">${a.title || a.name || 'Add-on'}</h3>
+        <p class="text-xs text-slate-500">${a.description || ''}</p>
+      </div>`).join('')}</div>`;
+  } catch { el.innerHTML = '<p class="text-slate-400 text-center py-8">Failed to load add-ons</p>'; }
+}
+
+// ==========================================================================
+// ADMIN PANEL
+// ==========================================================================
+function renderAdmin() {
+  return `<div class="fade-in">
+    <h1 class="text-2xl font-bold text-slate-800 mb-6"><i class="fas fa-shield-alt mr-2"></i>Admin Panel</h1>
+    <div class="flex gap-2 mb-6 flex-wrap">
+      ${['overview','users','projects','audit'].map(t => 
+        `<button onclick="loadAdminTab('${t}')" class="px-4 py-2 rounded-lg text-sm font-semibold border border-slate-200 hover:bg-primary-50 hover:border-primary-200">${t.charAt(0).toUpperCase() + t.slice(1)}</button>`
+      ).join('')}
+    </div>
+    <div id="admin-content"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-primary-500 text-2xl"></i></div></div>
+  </div>`;
+}
+
+async function loadAdminTab(tab) {
+  const el = document.getElementById('admin-content');
+  if (!el) return;
+  el.innerHTML = '<div class="text-center py-12"><i class="fas fa-spinner fa-spin text-primary-500 text-2xl"></i></div>';
+  try {
+    const data = await api(`/api/admin/${tab}`);
+    if (tab === 'overview') {
+      const d = data;
+      el.innerHTML = `<div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        ${statCard('fa-users', 'Users', d.total_users || 0, 'primary')}
+        ${statCard('fa-folder', 'Projects', d.total_projects || 0, 'emerald')}
+        ${statCard('fa-money-bill', 'Raised', fEGP(d.total_raised), 'accent')}
+        ${statCard('fa-exclamation-circle', 'Active Alerts', d.active_alerts || 0, 'red')}
+      </div>`;
+    } else if (tab === 'users') {
+      const users = data.users || [];
+      el.innerHTML = `<div class="bg-white rounded-2xl border overflow-hidden"><table class="w-full text-sm">
+        <thead><tr class="bg-slate-50 text-left text-xs text-slate-500"><th class="px-4 py-3">ID</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Reputation</th></tr></thead>
+        <tbody>${users.map(u => `<tr class="border-t border-slate-100"><td class="px-4 py-2">${u.id}</td><td>${u.full_name}</td><td class="text-xs">${u.email}</td><td><span class="capitalize text-xs">${u.role}</span></td><td>${u.verification_status}</td><td>${u.reputation_score || 50}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+    } else if (tab === 'projects') {
+      const projects = data.projects || [];
+      el.innerHTML = `<div class="bg-white rounded-2xl border overflow-hidden"><table class="w-full text-sm">
+        <thead><tr class="bg-slate-50 text-left text-xs text-slate-500"><th class="px-4 py-3">ID</th><th>Title</th><th>Tier</th><th>Status</th><th>Raised</th><th>Goal</th></tr></thead>
+        <tbody>${projects.map(p => `<tr class="border-t border-slate-100 cursor-pointer hover:bg-slate-50" onclick="navigate('project-detail',{id:${p.id}})"><td class="px-4 py-2">${p.id}</td><td>${p.title}</td><td>${tierBadge(p.tier)}</td><td>${p.status}</td><td>${fEGP(p.funding_raised)}</td><td>${fEGP(p.funding_goal)}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+    } else {
+      const log = data.audit_log || data.logs || [];
+      el.innerHTML = `<div class="bg-white rounded-2xl border overflow-hidden max-h-96 overflow-y-auto"><table class="w-full text-xs">
+        <thead class="sticky top-0 bg-slate-50"><tr class="text-left text-slate-500"><th class="px-3 py-2">Action</th><th>Entity</th><th>Actor</th><th>Time</th></tr></thead>
+        <tbody>${(Array.isArray(log) ? log : []).map(l => `<tr class="border-t border-slate-100"><td class="px-3 py-1.5">${l.action}</td><td>${l.entity_type}#${l.entity_id}</td><td>${l.actor_id || 'System'}</td><td>${timeAgo(l.created_at)}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+    }
+  } catch (e) { el.innerHTML = `<div class="text-red-500 text-center py-8">Failed to load: ${e.error || e.message || ''}</div>`; }
+}
+
+// ==========================================================================
+// NOTIFICATIONS
+// ==========================================================================
+function renderNotifications() {
+  return `<div class="fade-in">
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold text-slate-800"><i class="fas fa-bell mr-2"></i>Notifications</h1>
+      <button onclick="markAllRead()" class="btn-secondary text-sm"><i class="fas fa-check-double mr-1"></i>Mark All Read</button>
+    </div>
+    <div id="notif-list"><div class="flex items-center justify-center py-20"><i class="fas fa-spinner fa-spin text-primary-500 text-2xl"></i></div></div>
+  </div>`;
+}
+
+async function loadNotifications() {
+  const el = document.getElementById('notif-list');
+  if (!el) return;
+  try {
+    const data = await api('/api/governance/notifications');
+    const notifs = data.notifications || [];
+    // Update badge
+    const badge = document.getElementById('notif-badge');
+    if (badge && data.unread > 0) { badge.textContent = data.unread; badge.classList.remove('hidden'); }
+    
+    el.innerHTML = notifs.length === 0 ? '<p class="text-slate-400 text-center py-16">No notifications</p>' :
+      `<div class="space-y-2">${notifs.map(n => `
+        <div class="flex items-start gap-3 p-4 rounded-xl ${n.read_status ? 'bg-white' : 'bg-primary-50'} border border-slate-200">
+          <div class="w-8 h-8 rounded-lg bg-${n.notification_type === 'emergency' ? 'red' : 'primary'}-100 flex items-center justify-center flex-shrink-0">
+            <i class="fas ${n.notification_type === 'emergency' ? 'fa-exclamation-triangle text-red-500' : 'fa-bell text-primary-500'} text-sm"></i>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-sm text-slate-800">${n.title}</div>
+            <p class="text-xs text-slate-500 mt-0.5">${n.message || ''}</p>
+            <div class="text-xs text-slate-400 mt-1">${n.project_title ? n.project_title + ' — ' : ''}${timeAgo(n.created_at)}</div>
+          </div>
+          ${!n.read_status ? `<button onclick="markRead(${n.id})" class="text-xs text-primary-600 hover:underline flex-shrink-0">Mark read</button>` : ''}
+        </div>`).join('')}</div>`;
+  } catch { el.innerHTML = '<p class="text-slate-400 text-center py-8">Failed to load</p>'; }
+}
+
+async function markRead(id) { try { await api(`/api/governance/notifications/${id}/read`, { method: 'POST' }); loadNotifications(); } catch {} }
+async function markAllRead() { try { await api('/api/governance/notifications/read-all', { method: 'POST' }); showToast('All marked read'); loadNotifications(); } catch {} }
+
+// ==========================================================================
+// PROFILE
+// ==========================================================================
+function renderProfile() {
+  if (!currentUser) return '';
+  const u = currentUser;
+  return `<div class="fade-in max-w-2xl mx-auto">
+    <div class="bg-white rounded-2xl border border-slate-200 p-6">
+      <div class="flex items-center gap-4 mb-6">
+        <div class="w-16 h-16 rounded-full bg-gradient-to-br from-primary-500 to-accent-600 flex items-center justify-center text-white font-bold text-2xl">${(u.full_name || 'U').charAt(0)}</div>
+        <div>
+          <h2 class="text-xl font-bold text-slate-800">${u.full_name}</h2>
+          ${u.full_name_ar ? `<p class="text-sm text-slate-600 ar-text">${u.full_name_ar}</p>` : ''}
+          <div class="flex items-center gap-2 mt-1">
+            <span class="text-xs px-2 py-0.5 rounded-full bg-primary-100 text-primary-700 capitalize">${u.role}</span>
+            <span class="text-xs px-2 py-0.5 rounded-full ${u.verification_status === 'verified' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}">${u.verification_status || 'pending'}</span>
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        ${miniStat('Email', u.email)}
+        ${miniStat('Region', u.region || '—')}
+        ${miniStat('KYC Level', u.kyc_level || 0)}
+        ${miniStat('Reputation', (u.reputation_score || 50) + '/100')}
+        ${miniStat('AML Cleared', u.aml_cleared ? 'Yes' : 'No')}
+        ${miniStat('Joined', fDate(u.created_at))}
+      </div>
+      ${u.verification_status !== 'verified' ? `
+        <div class="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+          <p class="text-sm text-amber-700 mb-3"><i class="fas fa-id-card mr-1"></i>Complete KYC to invest</p>
+          <button onclick="autoApproveKYC()" class="btn-primary text-sm"><i class="fas fa-check mr-1"></i>Auto-Approve KYC (Demo)</button>
+        </div>` : ''}
+    </div>
+  </div>`;
+}
+
+async function autoApproveKYC() {
+  try {
+    await api('/api/auth/kyc/auto-approve', { method: 'POST' });
+    const data = await api('/api/auth/me');
+    currentUser = data.user;
+    showToast('KYC approved');
+    render();
+  } catch (e) { showToast(e.error || 'Failed', 'error'); }
+}
+
+// ==========================================================================
+// EVENT BINDING
+// ==========================================================================
+function bindEvents() {
+  // Login form
+  document.getElementById('login-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('login-error');
+    try {
+      const data = await api('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: document.getElementById('login-email').value, password: document.getElementById('login-password').value })
+      });
+      token = data.token;
+      localStorage.setItem('sherketi_token', token);
+      currentUser = data.user;
+      showToast('Welcome back, ' + (currentUser?.full_name || 'User'));
+      navigate('dashboard');
+    } catch (e) {
+      if (errEl) { errEl.textContent = e.error || 'Login failed'; errEl.classList.remove('hidden'); }
+    }
+  });
+
+  // Register form
+  document.getElementById('register-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('register-error');
+    try {
+      const data = await api('/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: document.getElementById('reg-email').value,
+          password: document.getElementById('reg-password').value,
+          full_name: document.getElementById('reg-name').value,
+          full_name_ar: document.getElementById('reg-name-ar').value,
+          role: document.getElementById('reg-role').value,
+          region: document.getElementById('reg-region').value,
+          national_id: document.getElementById('reg-nid').value,
+          user_type: document.getElementById('reg-role').value
+        })
+      });
+      token = data.token;
+      localStorage.setItem('sherketi_token', token);
+      currentUser = { full_name: document.getElementById('reg-name').value, role: document.getElementById('reg-role').value, email: document.getElementById('reg-email').value };
+      showToast('Account created!');
+      navigate('dashboard');
+    } catch (e) {
+      if (errEl) { errEl.textContent = e.error || 'Registration failed'; errEl.classList.remove('hidden'); }
+    }
+  });
+
+  // Create project form
+  document.getElementById('create-project-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const data = await api('/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: document.getElementById('cp-title').value,
+          title_ar: document.getElementById('cp-title-ar').value,
+          description: document.getElementById('cp-desc').value,
+          sector: document.getElementById('cp-sector').value,
+          tier: document.getElementById('cp-tier').value,
+          funding_goal: +document.getElementById('cp-goal').value,
+          equity_offered: +document.getElementById('cp-equity').value
+        })
+      });
+      showToast('Project created! Submitting for AI review...');
+      // Auto-submit for AI review
+      try {
+        const review = await api(`/api/projects/${data.projectId}/submit-review`, { method: 'POST' });
+        showToast(`AI Score: ${review.score}/100 — ${review.message}`);
+      } catch (re) { showToast(re.error || 'AI review issue', 'warning'); }
+      navigate('projects');
+    } catch (e) { showToast(e.error || 'Failed', 'error'); }
+  });
+
+  // Auto-load page data
+  if (currentPage === 'dashboard') loadDashboard();
+  if (currentPage === 'projects') loadProjects();
+  if (currentPage === 'project-detail' && pageParams.id) loadProjectDetail(pageParams.id);
+  if (currentPage === 'market') loadMarket();
+  if (currentPage === 'governance') loadGovernanceVotes();
+  if (currentPage === 'constitution') loadConstitution();
+  if (currentPage === 'addons') loadAddons();
+  if (currentPage === 'admin') loadAdminTab('overview');
+  if (currentPage === 'notifications') loadNotifications();
+  
+  // Load platform stats on landing
+  if (currentPage === 'landing') {
+    api('/api/dashboard/platform-stats').then(data => {
+      const el = document.getElementById('platform-stats');
+      if (el) el.innerHTML = `
+        ${landingStat('fa-folder-open', data.total_projects || 0, 'Projects')}
+        ${landingStat('fa-users', data.total_investors || 0, 'Investors')}
+        ${landingStat('fa-money-bill-wave', fEGP(data.total_raised || 0), 'Raised')}
+        ${landingStat('fa-chart-line', data.active_projects || 0, 'Active')}
+      `;
+    }).catch(() => {});
+  }
+}
+
+function landingStat(icon, value, label) {
+  return `<div class="glass rounded-xl p-4 text-center">
+    <i class="fas ${icon} text-white/60 mb-1"></i>
+    <div class="text-xl font-bold text-white">${value}</div>
+    <div class="text-xs text-white/60">${label}</div>
+  </div>`;
+}
+
+// ---------- Boot ----------
 init();
