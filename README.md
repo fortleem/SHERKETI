@@ -222,3 +222,40 @@ Feasibility, Valuation (JOZOUR v3), Salary Engine, Fraud Detection, Risk Predict
 ---
 
 **Last Updated:** 2026-04-17 | **Blueprint:** v3.1 | **Gaps Remaining:** 0
+
+---
+
+## v3.3.0 Frontend Dashboard & Test Suite
+
+### Full Dashboard UI
+The platform now includes a comprehensive single-page application (SPA) dashboard accessible at `/`:
+
+| Section | Features |
+|---------|----------|
+| **Landing Page** | Platform stats, feature highlights, hero section |
+| **Auth** | Login, Register (6 roles: investor, founder, manager, accountant, law_firm, regulator) |
+| **Dashboard** | Role-based views — Investor portfolio, Founder projects, Regulator FRA shadow mode, etc. |
+| **Projects** | Browse, filter by status/tier/sector, create projects, detail view with board/shareholders/milestones |
+| **Governance** | Create proposals, vote, file disputes, emergency capital recall, SHERKETI term management |
+| **Market** | Secondary market orders, sell/buy shares, block trades, liquidity reserve |
+| **AI Tools** | 7 tools — Feasibility, Valuation, Salary, Reputation, Risk Assessment, Fundamental Pricing, Tax Calculator |
+| **Financial** | Report generation, dividend distribution (w/ 10% tax), real-time financial dashboard |
+| **Board Ops** | 8 tools — Meetings, Performance eval, Contracts, Reputation, Early Warning, Equity Conversion, Dispute Prediction, Market Intelligence |
+| **Admin** | Overview, Users, Projects, Audit Log (admin-only) |
+| **Add-ons** | View all 17 add-ons with toggle support |
+| **Notifications** | Real-time notifications with mark read/all read |
+| **Profile** | User info, KYC status, auto-approve (demo mode) |
+
+### Automated API Test Suite
+Located at `tests/api-tests.sh` — run with `bash tests/api-tests.sh`:
+
+- **116 total tests** across all 12 route groups + frontend
+- **98% pass rate** (114/116 passing)
+- Tests cover: Auth (14), Projects (13), Governance (16), Market (8), AI (9), Dashboard (8), Admin (6), Constitution (7), Add-ons (14), Financial (3), Board-Ops (12), Frontend (5)
+- Includes error case testing (401, 403, 404, 409 responses)
+- Full flow: register → KYC → create project → AI review → invest → governance
+
+### URLs
+- **Live Preview**: [Sandbox URL] (port 3000)
+- **GitHub**: https://github.com/fortleem/SHERKETI
+- **Health Check**: `/api/health`
