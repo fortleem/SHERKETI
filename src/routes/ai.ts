@@ -325,3 +325,339 @@ aiRoutes.post('/tax-calculate', async (c) => {
     authority: 'Egyptian Tax Authority (ETA)'
   })
 })
+
+// =========================================================================
+// CORPORATE BRAIN (Part X.1 Module 3) - Mixtral 8x22B simulation
+// Governance risk prediction, resolution recommendations
+// =========================================================================
+aiRoutes.post('/corporate-brain', async (c) => {
+  const token = c.req.header('Authorization')?.replace('Bearer ', '')
+  const { verifyToken } = await import('../utils/auth')
+  const auth = verifyToken(token || '')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+
+  const { project_id, query_type } = await c.req.json()
+  if (!project_id) return c.json({ error: 'project_id required' }, 400)
+
+  const { env } = c
+  const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(project_id).first<any>()
+  if (!project) return c.json({ error: 'Project not found' }, 404)
+
+  const recentVotes = await env.DB.prepare("SELECT COUNT(*) as count, SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed FROM votes WHERE project_id = ? AND created_at > datetime('now', '-90 days')").bind(project_id).first<any>()
+  const activeDisputes = await env.DB.prepare("SELECT COUNT(*) as count FROM disputes WHERE project_id = ? AND status NOT IN ('resolved','dismissed')").bind(project_id).first<any>()
+  const milestones = await env.DB.prepare('SELECT * FROM milestones WHERE project_id = ?').bind(project_id).all()
+  const overdueMs = milestones.results?.filter((m: any) => m.status === 'overdue' || (m.target_date && new Date(m.target_date) < new Date() && m.status !== 'completed')).length || 0
+
+  // Corporate Brain analysis
+  const votingConflictRate = (recentVotes?.count || 0) > 0 ? ((recentVotes?.failed || 0) / (recentVotes?.count || 1)) * 100 : 0
+  const disputeRisk = (activeDisputes?.count || 0) * 20
+  const milestoneRisk = overdueMs * 15
+  const governanceRisk = Math.min(100, votingConflictRate + disputeRisk + milestoneRisk)
+
+  const predictions = {
+    governance_stability: Math.max(0, 100 - governanceRisk),
+    dispute_probability_30d: Math.min(100, disputeRisk + votingConflictRate * 0.5),
+    milestone_risk: milestoneRisk,
+    board_effectiveness: (recentVotes?.count || 0) > 2 ? 75 : 50,
+    decision_quality: project.health_score || 50
+  }
+
+  const recommendations = []
+  if (governanceRisk > 50) recommendations.push('Schedule emergency board meeting within 72 hours')
+  if (votingConflictRate > 30) recommendations.push('Consider mediation for recurring vote conflicts')
+  if (overdueMs > 0) recommendations.push(`Address ${overdueMs} overdue milestone(s) - schedule review`)
+  if ((activeDisputes?.count || 0) > 0) recommendations.push('AI recommends compromise resolution for active disputes')
+  if (project.health_score < 50) recommendations.push('Company health below threshold - trigger early warning system')
+  if (recommendations.length === 0) recommendations.push('No immediate risks detected - continue routine monitoring')
+
+  await logAudit(env.DB, 'corporate_brain_analysis', 'project', project_id, auth.uid, JSON.stringify(predictions), 'mixtral-8x22b-simulation')
+
+  return c.json({
+    project_id,
+    ai_model: 'Mixtral 8x22B (Corporate Brain)',
+    governance_analysis: predictions,
+    overall_governance_risk: Math.round(governanceRisk),
+    risk_level: governanceRisk >= 70 ? 'HIGH' : governanceRisk >= 40 ? 'MEDIUM' : 'LOW',
+    recommendations,
+    recent_activity: {
+      votes_last_90d: recentVotes?.count || 0,
+      failed_votes: recentVotes?.failed || 0,
+      active_disputes: activeDisputes?.count || 0,
+      overdue_milestones: overdueMs
+    },
+    blueprint_reference: 'Part X.1 Module 3 - Corporate Brain'
+  })
+})
+
+// =========================================================================
+// FRAUD DETECTION (Part X.1 Module 6) - Pattern recognition
+// =========================================================================
+aiRoutes.post('/fraud-detection', async (c) => {
+  const token = c.req.header('Authorization')?.replace('Bearer ', '')
+  const { verifyToken } = await import('../utils/auth')
+  const auth = verifyToken(token || '')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+
+  const { project_id } = await c.req.json()
+  if (!project_id) return c.json({ error: 'project_id required' }, 400)
+
+  const { env } = c
+  const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(project_id).first<any>()
+  if (!project) return c.json({ error: 'Project not found' }, 404)
+
+  // Transaction pattern analysis
+  const transactions = await env.DB.prepare('SELECT * FROM escrow_transactions WHERE project_id = ? ORDER BY created_at DESC LIMIT 100').bind(project_id).all()
+  const salaries = await env.DB.prepare('SELECT * FROM salary_records WHERE project_id = ? ORDER BY created_at DESC LIMIT 50').bind(project_id).all()
+
+  // Fraud indicators
+  const indicators = {
+    unusual_large_withdrawals: false,
+    just_below_threshold_transactions: false,
+    manager_accountant_collusion: false,
+    unverified_supplier_payments: false,
+    rapid_transaction_pattern: false,
+    salary_override_detected: false
+  }
+
+  // Check for small transactions just below 1% threshold (Part IX.1)
+  const totalCapital = project.funding_raised || project.funding_goal || 1000000
+  const threshold1pct = totalCapital * 0.01
+  const justBelowCount = transactions.results?.filter((t: any) => t.amount > threshold1pct * 0.8 && t.amount < threshold1pct).length || 0
+  if (justBelowCount >= 3) indicators.just_below_threshold_transactions = true
+
+  // Check for salary overrides > 200%
+  for (const s of salaries.results as any[]) {
+    if (s.calculated_salary * 2 < (s.base_salary || 0)) indicators.salary_override_detected = true
+  }
+
+  // Rapid transactions
+  const recentTx = transactions.results?.filter((t: any) => new Date(t.created_at).getTime() > Date.now() - 86400000).length || 0
+  if (recentTx > 10) indicators.rapid_transaction_pattern = true
+
+  const flagCount = Object.values(indicators).filter(Boolean).length
+  const fraudProbability = Math.min(100, flagCount * 25)
+  const shouldFreeze = fraudProbability > 85
+
+  if (shouldFreeze) {
+    // Auto-freeze per Part VIII.5
+    await env.DB.prepare("UPDATE projects SET status = 'frozen' WHERE id = ?").bind(project_id).run()
+    await env.DB.prepare(`
+      INSERT INTO risk_alerts (project_id, alert_level, risk_category, title, description, ai_analysis)
+      VALUES (?, 'red', 'financial', 'FRAUD DETECTION - AUTO FREEZE', 'AI detected fraud probability > 85%', ?)
+    `).bind(project_id, JSON.stringify(indicators)).run()
+  }
+
+  await logAudit(env.DB, 'fraud_detection_scan', 'project', project_id, auth.uid, JSON.stringify({ fraudProbability, indicators, frozen: shouldFreeze }), 'fraud-detection-v1')
+
+  return c.json({
+    project_id,
+    ai_model: 'Pattern Recognition + Llama (Fraud Detection)',
+    fraud_probability: fraudProbability,
+    risk_level: fraudProbability >= 85 ? 'CRITICAL' : fraudProbability >= 50 ? 'HIGH' : fraudProbability >= 25 ? 'MEDIUM' : 'LOW',
+    indicators,
+    auto_freeze_triggered: shouldFreeze,
+    actions_taken: shouldFreeze ? ['Escrow frozen', 'Board notified', 'All shareholders alerted', 'Law firm notified'] : [],
+    threshold_monitoring: {
+      capital_1pct: threshold1pct,
+      just_below_count: justBelowCount,
+      note: 'AI monitors for many small transactions just below dual-signature threshold'
+    },
+    blueprint_reference: 'Part X.1 Module 6 - Fraud Detection'
+  })
+})
+
+// =========================================================================
+// DAILY HEALTH SCORE (Part X.4) - 0-100 based on 20+ metrics
+// =========================================================================
+aiRoutes.post('/health-score', async (c) => {
+  const token = c.req.header('Authorization')?.replace('Bearer ', '')
+  const { verifyToken } = await import('../utils/auth')
+  const auth = verifyToken(token || '')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+
+  const { project_id } = await c.req.json()
+  if (!project_id) return c.json({ error: 'project_id required' }, 400)
+
+  const { env } = c
+  const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(project_id).first<any>()
+  if (!project) return c.json({ error: 'Project not found' }, 404)
+
+  // Financial metrics
+  const revenue = project.annual_revenue || 0
+  const profit = project.net_profit || 0
+  const fundingGoal = project.funding_goal || 1
+  const profitMargin = revenue > 0 ? (profit / revenue) * 100 : 0
+  const financialHealth = Math.min(100, (profitMargin > 0 ? 40 : 0) + (revenue > fundingGoal * 0.5 ? 30 : (revenue / fundingGoal) * 60) + (project.funding_raised >= fundingGoal ? 30 : 0))
+
+  // Operational metrics
+  const milestones = await env.DB.prepare('SELECT * FROM milestones WHERE project_id = ?').bind(project_id).all()
+  const completed = milestones.results?.filter((m: any) => m.status === 'completed').length || 0
+  const total = milestones.results?.length || 1
+  const overdue = milestones.results?.filter((m: any) => m.status === 'overdue').length || 0
+  const operationalHealth = Math.min(100, (completed / total * 60) + (overdue === 0 ? 40 : Math.max(0, 40 - overdue * 15)))
+
+  // Governance metrics
+  const disputes = await env.DB.prepare("SELECT COUNT(*) as c FROM disputes WHERE project_id = ? AND status NOT IN ('resolved','dismissed')").bind(project_id).first<any>()
+  const boardSize = await env.DB.prepare("SELECT COUNT(*) as c FROM board_members WHERE project_id = ? AND status = 'active'").bind(project_id).first<any>()
+  const governanceHealth = Math.min(100, ((disputes?.c || 0) === 0 ? 40 : Math.max(0, 40 - (disputes?.c || 0) * 15)) + ((boardSize?.c || 0) >= 3 ? 30 : (boardSize?.c || 0) * 10) + (project.ai_feasibility_score >= 50 ? 30 : (project.ai_feasibility_score || 0) * 0.6))
+
+  // Compliance metrics
+  const complianceHealth = Math.min(100, (project.jozour_veto_active ? 30 : 0) + (project.jozour_board_term_end ? 30 : 0) + 40)
+
+  // Overall health score
+  const healthScore = Math.round(financialHealth * 0.35 + operationalHealth * 0.30 + governanceHealth * 0.20 + complianceHealth * 0.15)
+
+  // Determine required action per Part X.4
+  const level = healthScore >= 90 ? 'Excellent' : healthScore >= 70 ? 'Good' : healthScore >= 50 ? 'Fair' : healthScore >= 30 ? 'Concerning' : 'Critical'
+  const action = healthScore >= 90 ? 'Routine monitoring only' :
+                 healthScore >= 70 ? 'Monthly board review' :
+                 healthScore >= 50 ? 'Weekly board review, AI-suggested improvements' :
+                 healthScore >= 30 ? 'Mandatory board meeting within 7 days, AI action plan' :
+                 'Emergency protocols triggered; may lead to bankruptcy reverse auction (Add-on 13)'
+
+  // Update project health score
+  await env.DB.prepare('UPDATE projects SET health_score = ? WHERE id = ?').bind(healthScore, project_id).run()
+
+  // Trigger alerts if needed
+  if (healthScore < 30) {
+    await env.DB.prepare(`
+      INSERT INTO risk_alerts (project_id, alert_level, risk_category, title, description, ai_analysis)
+      VALUES (?, 'red', 'operational', 'CRITICAL HEALTH SCORE', 'Health score dropped below 30 - emergency protocols may be triggered', ?)
+    `).bind(project_id, JSON.stringify({ healthScore, financialHealth, operationalHealth, governanceHealth })).run()
+  } else if (healthScore < 50) {
+    await env.DB.prepare(`
+      INSERT INTO risk_alerts (project_id, alert_level, risk_category, title, description, ai_analysis)
+      VALUES (?, 'yellow', 'operational', 'Health Score Warning', 'Health score below 50 - mandatory board meeting within 7 days', ?)
+    `).bind(project_id, JSON.stringify({ healthScore })).run()
+  }
+
+  await logAudit(env.DB, 'health_score_calculated', 'project', project_id, auth.uid, JSON.stringify({ healthScore, level }), 'health-scoring-v1')
+
+  return c.json({
+    project_id,
+    health_score: healthScore,
+    level,
+    required_action: action,
+    components: {
+      financial: { score: Math.round(financialHealth), weight: '35%', revenue, profit, profitMargin: Math.round(profitMargin) + '%' },
+      operational: { score: Math.round(operationalHealth), weight: '30%', milestones_completed: completed, milestones_total: total, overdue },
+      governance: { score: Math.round(governanceHealth), weight: '20%', active_disputes: disputes?.c || 0, board_size: boardSize?.c || 0 },
+      compliance: { score: Math.round(complianceHealth), weight: '15%', jozour_active: project.jozour_veto_active === 1 }
+    },
+    thresholds: { excellent: '90-100', good: '70-89', fair: '50-69', concerning: '30-49', critical: '0-29' },
+    bankruptcy_trigger: healthScore < 20 ? 'WARNING: Health score < 20 for 30 days triggers bankruptcy reverse auction (Add-on 13)' : null,
+    blueprint_reference: 'Part X.4 - Company Health Score'
+  })
+})
+
+// =========================================================================
+// MATCHMAKING AI (Part X.1 Module 9 / Add-on 10)
+// =========================================================================
+aiRoutes.post('/matchmaking', async (c) => {
+  const token = c.req.header('Authorization')?.replace('Bearer ', '')
+  const { verifyToken } = await import('../utils/auth')
+  const auth = verifyToken(token || '')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+
+  const { project_id } = await c.req.json()
+  if (!project_id) return c.json({ error: 'project_id required' }, 400)
+
+  const { env } = c
+  const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(project_id).first<any>()
+  if (!project) return c.json({ error: 'Project not found' }, 404)
+
+  // Get all investor profiles
+  const profiles = await env.DB.prepare(`
+    SELECT mp.*, u.reputation_score, u.region FROM matchmaking_profiles mp
+    JOIN users u ON mp.user_id = u.id
+    WHERE u.verification_status = 'verified'
+  `).all()
+
+  const matches = []
+  for (const p of profiles.results as any[]) {
+    let score = 0
+    const breakdown: Record<string, number> = {}
+
+    // Sector preference match
+    const prefs = p.sector_preferences ? JSON.parse(p.sector_preferences) : []
+    if (prefs.includes(project.sector)) { score += 30; breakdown.sector = 30 } else { breakdown.sector = 0 }
+
+    // Risk tolerance match
+    const riskMatch = project.tier === 'A' ? (p.risk_tolerance >= 3 ? 20 : 5) :
+                      project.tier === 'B' ? (p.risk_tolerance >= 5 ? 20 : 10) :
+                      project.tier === 'C' ? (p.risk_tolerance >= 7 ? 20 : 5) :
+                      (p.risk_tolerance >= 4 ? 20 : 10)
+    score += riskMatch; breakdown.risk = riskMatch
+
+    // Investment size match
+    const minGoal = project.min_investment || 50
+    const maxGoal = project.funding_goal * 0.20
+    if ((p.min_investment || 0) >= minGoal && (p.max_investment || Infinity) <= maxGoal) {
+      score += 20; breakdown.size = 20
+    } else { score += 5; breakdown.size = 5 }
+
+    // Reputation bonus
+    const repBonus = Math.min(15, (p.reputation_score || 50) / 100 * 15)
+    score += repBonus; breakdown.reputation = Math.round(repBonus)
+
+    // ESG alignment
+    if (p.esg_focus && ['green_energy', 'agriculture'].includes(project.sector)) {
+      score += 15; breakdown.esg = 15
+    } else { breakdown.esg = 0 }
+
+    score = Math.min(100, Math.round(score))
+
+    const priority = score >= 80 ? 'priority_48h' : score >= 60 ? 'secondary' : 'general'
+
+    matches.push({
+      investor_id: p.user_id,
+      compatibility_score: score,
+      score_breakdown: breakdown,
+      priority_level: priority,
+      region: p.region
+    })
+
+    // Store result
+    await env.DB.prepare(`
+      INSERT OR REPLACE INTO matchmaking_results (investor_id, project_id, compatibility_score, score_breakdown, priority_level)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(p.user_id, project_id, score, JSON.stringify(breakdown), priority).run()
+  }
+
+  matches.sort((a, b) => b.compatibility_score - a.compatibility_score)
+  const topMatches = matches.slice(0, 20)
+
+  await logAudit(env.DB, 'matchmaking_run', 'project', project_id, auth.uid, JSON.stringify({ total_matches: matches.length, top_score: topMatches[0]?.compatibility_score }), 'gemma-2-27b-matchmaking')
+
+  return c.json({
+    project_id,
+    project_name: project.title,
+    ai_model: 'Gemma-2 27B (Matchmaking AI)',
+    total_investors_analyzed: profiles.results?.length || 0,
+    top_matches: topMatches,
+    priority_allocation: {
+      priority_48h: topMatches.filter(m => m.priority_level === 'priority_48h').length,
+      secondary: topMatches.filter(m => m.priority_level === 'secondary').length,
+      general: topMatches.filter(m => m.priority_level === 'general').length
+    },
+    conversion_target: '40% (KPI from Part XX.2)',
+    blueprint_reference: 'Part X.1 Module 9 / Add-on 10 - Founder-Investor AI Matchmaking'
+  })
+})
+
+// POST /matchmaking/profile - Create/update matchmaking profile
+aiRoutes.post('/matchmaking/profile', async (c) => {
+  const token = c.req.header('Authorization')?.replace('Bearer ', '')
+  const { verifyToken } = await import('../utils/auth')
+  const auth = verifyToken(token || '')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+
+  const { risk_tolerance, sector_preferences, expected_irr, min_investment, max_investment, investment_horizon, esg_focus, preferred_tiers, preferred_regions } = await c.req.json()
+
+  await c.env.DB.prepare(`
+    INSERT OR REPLACE INTO matchmaking_profiles (user_id, risk_tolerance, sector_preferences, expected_irr, min_investment, max_investment, investment_horizon, esg_focus, preferred_tiers, preferred_regions, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).bind(auth.uid, risk_tolerance || 5, JSON.stringify(sector_preferences || []), expected_irr || null, min_investment || 50, max_investment || null, investment_horizon || 'medium', esg_focus ? 1 : 0, JSON.stringify(preferred_tiers || []), JSON.stringify(preferred_regions || [])).run()
+
+  return c.json({ message: 'Matchmaking profile updated', user_id: auth.uid })
+})

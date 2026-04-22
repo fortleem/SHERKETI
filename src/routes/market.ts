@@ -308,3 +308,272 @@ marketRoutes.get('/liquidity-reserve', async (c) => {
     reference: 'Part XI.3 — Liquidity Guarantee via Platform Backstop'
   })
 })
+
+// =========================================================================
+// Price Lock (Part XI.3) - 24h price lock when seller places order
+// =========================================================================
+marketRoutes.post('/price-lock', async (c) => {
+  const token = c.req.header('Authorization')?.replace('Bearer ', '')
+  const { verifyToken } = await import('../utils/auth')
+  const auth = verifyToken(token || '')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+
+  const { order_id } = await c.req.json()
+  if (!order_id) return c.json({ error: 'order_id required' }, 400)
+
+  const { env } = c
+  const order = await env.DB.prepare('SELECT * FROM market_orders WHERE id = ?').bind(order_id).first<any>()
+  if (!order) return c.json({ error: 'Order not found' }, 404)
+
+  const project = await env.DB.prepare('SELECT fundamental_share_price FROM projects WHERE id = ?').bind(order.project_id).first<any>()
+  const lockedPrice = project?.fundamental_share_price || order.ask_price
+
+  const lockEnd = new Date()
+  lockEnd.setHours(lockEnd.getHours() + 24)
+
+  await env.DB.prepare(`
+    INSERT INTO price_locks (project_id, order_id, locked_price, lock_end) VALUES (?, ?, ?, ?)
+  `).bind(order.project_id, order_id, lockedPrice, lockEnd.toISOString()).run()
+
+  return c.json({
+    order_id,
+    locked_price: lockedPrice,
+    lock_start: new Date().toISOString(),
+    lock_end: lockEnd.toISOString(),
+    note: 'If new AI price published during lock, order auto-adjusts or can be cancelled and re-placed',
+    blueprint_reference: 'Part XI.3 - Price Lock'
+  })
+})
+
+// =========================================================================
+// Price Bands (Part XI.3) - ±5% standard, ±10% exceptional news
+// =========================================================================
+marketRoutes.get('/price-bands/:projectId', async (c) => {
+  const projectId = c.req.param('projectId')
+  const { env } = c
+
+  const project = await env.DB.prepare('SELECT id, title, fundamental_share_price, health_score FROM projects WHERE id = ?').bind(projectId).first<any>()
+  if (!project) return c.json({ error: 'Project not found' }, 404)
+
+  const price = project.fundamental_share_price || 0
+  const exceptionalNews = project.health_score < 30 || project.health_score > 95
+
+  const bandWidth = exceptionalNews ? 0.10 : 0.05
+  const bandLow = Math.round(price * (1 - bandWidth) * 100) / 100
+  const bandHigh = Math.round(price * (1 + bandWidth) * 100) / 100
+
+  return c.json({
+    project_id: parseInt(projectId),
+    project_name: project.title,
+    ai_fundamental_price: price,
+    price_band: {
+      low: bandLow,
+      high: bandHigh,
+      width: `±${bandWidth * 100}%`,
+      exceptional_news_detected: exceptionalNews,
+      note: exceptionalNews ? 'Band expanded to ±10% due to exceptional conditions, resets after 7 days' : 'Standard ±5% sentiment band'
+    },
+    trading_rule: 'All trades must execute within this price band. No bidding or negotiation.',
+    blueprint_reference: 'Part XI.3 - Price Bands'
+  })
+})
+
+// =========================================================================
+// Liquidity Backstop Auto-Buy (Part XI.3)
+// =========================================================================
+marketRoutes.post('/backstop-buy', async (c) => {
+  const token = c.req.header('Authorization')?.replace('Bearer ', '')
+  const { verifyToken } = await import('../utils/auth')
+  const auth = verifyToken(token || '')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+
+  const { project_id } = await c.req.json()
+  if (!project_id) return c.json({ error: 'project_id required' }, 400)
+
+  const { env } = c
+
+  // Check liquidity reserve
+  let reserve = await env.DB.prepare('SELECT * FROM liquidity_reserve WHERE project_id = ?').bind(project_id).first<any>()
+  if (!reserve) {
+    await env.DB.prepare('INSERT INTO liquidity_reserve (project_id, reserve_balance) VALUES (?, 0)').bind(project_id).run()
+    reserve = { reserve_balance: 0, consecutive_sell_days: 0, backstop_active: 0 }
+  }
+
+  // Check consecutive sell > buy days
+  const sellOrders = await env.DB.prepare("SELECT COUNT(*) as count FROM market_orders WHERE project_id = ? AND status IN ('listed','priority_window')").bind(project_id).first<any>()
+  const buyOrders = await env.DB.prepare("SELECT COUNT(*) as count FROM market_orders WHERE project_id = ? AND buyer_id IS NOT NULL AND status = 'pending_board'").bind(project_id).first<any>()
+
+  const sellExceeds = (sellOrders?.count || 0) > (buyOrders?.count || 0)
+  const newConsecutiveDays = sellExceeds ? (reserve.consecutive_sell_days || 0) + 1 : 0
+  const shouldActivate = newConsecutiveDays >= 5
+
+  await env.DB.prepare('UPDATE liquidity_reserve SET consecutive_sell_days = ?, backstop_active = ?, updated_at = CURRENT_TIMESTAMP WHERE project_id = ?')
+    .bind(newConsecutiveDays, shouldActivate ? 1 : 0, project_id).run()
+
+  if (shouldActivate) {
+    const project = await env.DB.prepare('SELECT fundamental_share_price FROM projects WHERE id = ?').bind(project_id).first<any>()
+    const price = project?.fundamental_share_price || 0
+
+    return c.json({
+      project_id,
+      backstop_triggered: true,
+      consecutive_sell_days: newConsecutiveDays,
+      action: 'Reserve buying excess shares at AI fundamental price',
+      buy_price: price,
+      reserve_balance: reserve.reserve_balance,
+      rule: 'Reserve holds shares until buy orders return; never sells at a loss',
+      blueprint_reference: 'Part XI.3 - Liquidity Guarantee via Platform Backstop'
+    })
+  }
+
+  return c.json({
+    project_id,
+    backstop_triggered: false,
+    consecutive_sell_days: newConsecutiveDays,
+    days_until_trigger: Math.max(0, 5 - newConsecutiveDays),
+    sell_orders: sellOrders?.count || 0,
+    buy_orders: buyOrders?.count || 0
+  })
+})
+
+// =========================================================================
+// Soft Pledges (Part VII.1) - Interest Phase non-binding pledges
+// =========================================================================
+marketRoutes.post('/soft-pledge', async (c) => {
+  const token = c.req.header('Authorization')?.replace('Bearer ', '')
+  const { verifyToken } = await import('../utils/auth')
+  const auth = verifyToken(token || '')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+
+  const { project_id, pledge_amount } = await c.req.json()
+  if (!project_id || !pledge_amount) return c.json({ error: 'project_id and pledge_amount required' }, 400)
+
+  const { env } = c
+  const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(project_id).first<any>()
+  if (!project) return c.json({ error: 'Project not found' }, 404)
+  if (project.status !== 'interest_phase') return c.json({ error: 'Project not in interest phase' }, 400)
+
+  // Diversification limit: no single pledge > 20% of goal (Part VII.1)
+  if (pledge_amount > project.funding_goal * 0.20) {
+    return c.json({ error: 'Single pledge cannot exceed 20% of funding goal (anti-concentration)', max_allowed: project.funding_goal * 0.20 }, 400)
+  }
+
+  // Get investor reputation for credibility weight
+  const investor = await env.DB.prepare('SELECT reputation_score FROM users WHERE id = ?').bind(auth.uid).first<any>()
+  const credibilityWeight = (investor?.reputation_score || 50) / 100
+
+  await env.DB.prepare(`
+    INSERT INTO soft_pledges (project_id, investor_id, pledge_amount, credibility_weight) VALUES (?, ?, ?, ?)
+  `).bind(project_id, auth.uid, pledge_amount, credibilityWeight).run()
+
+  // Update project soft pledge total
+  const totalPledges = await env.DB.prepare('SELECT SUM(pledge_amount * credibility_weight) as weighted FROM soft_pledges WHERE project_id = ? AND status = ?').bind(project_id, 'active').first<any>()
+  const totalVotes = await env.DB.prepare("SELECT COUNT(*) as count FROM soft_pledges WHERE project_id = ? AND status = 'active'").bind(project_id).first<any>()
+
+  await env.DB.prepare('UPDATE projects SET soft_pledges = ?, interest_votes = ? WHERE id = ?')
+    .bind(totalPledges?.weighted || 0, totalVotes?.count || 0, project_id).run()
+
+  // Check thresholds
+  const thresholdMet = (totalPledges?.weighted || 0) >= project.funding_goal * 0.30 || (totalVotes?.count || 0) >= 500
+
+  return c.json({
+    project_id,
+    pledge_amount,
+    credibility_weight: Math.round(credibilityWeight * 100) / 100,
+    weighted_pledge: Math.round(pledge_amount * credibilityWeight),
+    total_pledges_weighted: Math.round(totalPledges?.weighted || 0),
+    total_interest_votes: totalVotes?.count || 0,
+    threshold_met: thresholdMet,
+    threshold_rules: {
+      pledge_threshold: '30% of funding goal (credibility-weighted)',
+      vote_threshold: '500 distinct interested votes',
+      current_vs_goal: `${Math.round(((totalPledges?.weighted || 0) / project.funding_goal) * 100)}%`
+    },
+    priority_allocation: 'Pledgers get 48-hour exclusive window when live round opens',
+    blueprint_reference: 'Part VII.1 - Investor Interest Phase'
+  })
+})
+
+// =========================================================================
+// Reservation System (Part VII.2) - 48h reservation with extension
+// =========================================================================
+marketRoutes.post('/reserve', async (c) => {
+  const token = c.req.header('Authorization')?.replace('Bearer ', '')
+  const { verifyToken } = await import('../utils/auth')
+  const auth = verifyToken(token || '')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+
+  const { project_id, shares_count, amount } = await c.req.json()
+  if (!project_id || !amount) return c.json({ error: 'project_id and amount required' }, 400)
+
+  const { env } = c
+  const project = await env.DB.prepare('SELECT * FROM projects WHERE id = ?').bind(project_id).first<any>()
+  if (!project || project.status !== 'live_fundraising') return c.json({ error: 'Project not in live fundraising' }, 400)
+
+  // Check investor cap
+  if (project.investor_cap_type === 'limited') {
+    const currentInvestors = await env.DB.prepare("SELECT COUNT(DISTINCT investor_id) as count FROM reservations WHERE project_id = ? AND status IN ('reserved','extended','paid')").bind(project_id).first<any>()
+    if ((currentInvestors?.count || 0) >= (project.investor_cap || 999999)) {
+      return c.json({ error: 'Investor cap reached', max_investors: project.investor_cap }, 400)
+    }
+  }
+
+  // Check minimum investment
+  const minInvestment = project.ai_min_investment || project.min_investment || 50
+  if (amount < minInvestment) {
+    return c.json({ error: `Minimum investment is ${minInvestment} EGP`, min_investment: minInvestment }, 400)
+  }
+
+  // Check failure count (Part VII.2 - penalty for >2 abandonments in 12 months)
+  const failures = await env.DB.prepare("SELECT COUNT(*) as count FROM reservations WHERE investor_id = ? AND status IN ('cancelled','expired') AND created_at > datetime('now', '-12 months')").bind(auth.uid).first<any>()
+  if ((failures?.count || 0) >= 2) {
+    return c.json({ error: 'Temporary ban: more than 2 abandoned reservations in 12 months. 30-day cooling period applied.', ban_days: 30 }, 403)
+  }
+
+  const expiresAt = new Date()
+  expiresAt.setHours(expiresAt.getHours() + 48)
+
+  await env.DB.prepare(`
+    INSERT INTO reservations (project_id, investor_id, shares_count, amount, expires_at) VALUES (?, ?, ?, ?, ?)
+  `).bind(project_id, auth.uid, shares_count || Math.floor(amount / (project.fundamental_share_price || 1)), amount, expiresAt.toISOString()).run()
+
+  return c.json({
+    project_id,
+    amount,
+    shares_reserved: shares_count || Math.floor(amount / (project.fundamental_share_price || 1)),
+    expires_at: expiresAt.toISOString(),
+    extension_available: true,
+    extension_note: 'One 48-hour extension allowed upon request',
+    payment_instructions: 'Transfer to law firm escrow account with unique reference code',
+    min_investment: minInvestment,
+    blueprint_reference: 'Part VII.2 - Reservation System'
+  })
+})
+
+// POST /reserve/:id/extend - Extend reservation by 48h
+marketRoutes.post('/reserve/:id/extend', async (c) => {
+  const token = c.req.header('Authorization')?.replace('Bearer ', '')
+  const { verifyToken } = await import('../utils/auth')
+  const auth = verifyToken(token || '')
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
+
+  const id = c.req.param('id')
+  const { env } = c
+  const reservation = await env.DB.prepare('SELECT * FROM reservations WHERE id = ? AND investor_id = ?').bind(id, auth.uid).first<any>()
+  if (!reservation) return c.json({ error: 'Reservation not found' }, 404)
+  if (reservation.extension_used) return c.json({ error: 'Extension already used. Only one 48-hour extension allowed.' }, 400)
+
+  const newExpiry = new Date(reservation.expires_at)
+  newExpiry.setHours(newExpiry.getHours() + 48)
+
+  await env.DB.prepare('UPDATE reservations SET status = ?, expires_at = ?, extension_used = 1 WHERE id = ?')
+    .bind('extended', newExpiry.toISOString(), id).run()
+
+  return c.json({
+    reservation_id: parseInt(id),
+    new_expires_at: newExpiry.toISOString(),
+    extension_used: true,
+    note: 'No further extensions available. Transfer funds before expiry.',
+    blueprint_reference: 'Part VII.2 - Reservation Extension'
+  })
+})

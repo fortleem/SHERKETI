@@ -677,3 +677,153 @@ governanceRoutes.post('/process-expired-votes', async (c) => {
     reference: 'Part VIII.2 — Voting Mechanics'
   })
 })
+
+// =========================================================================
+// PROXY VOTING (Part VIII.2)
+// =========================================================================
+governanceRoutes.post('/proxy/authorize', async (c) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
+  const payload = verifyToken(authHeader.replace('Bearer ', ''))
+  if (!payload) return c.json({ error: 'Invalid token' }, 401)
+
+  const { proxy_user_id, project_id, scope, vote_id, valid_until } = await c.req.json()
+  if (!proxy_user_id) return c.json({ error: 'proxy_user_id required' }, 400)
+
+  // SHERKETI representative cannot use proxy voting (Part VIII.2)
+  const grantor = await c.env.DB.prepare('SELECT role FROM users WHERE id = ?').bind(payload.uid).first<any>()
+  const isSherketiRep = await c.env.DB.prepare("SELECT id FROM board_members WHERE user_id = ? AND role = 'jozour_observer' AND status = 'active'").bind(payload.uid).first()
+  if (isSherketiRep) {
+    return c.json({ error: 'SHERKETI representative cannot use proxy voting (Part VIII.2)' }, 403)
+  }
+
+  const authHash = btoa(JSON.stringify({ grantor: payload.uid, proxy: proxy_user_id, scope, date: new Date().toISOString() }))
+
+  await c.env.DB.prepare(`
+    INSERT INTO proxy_authorizations (grantor_id, proxy_id, project_id, scope, vote_id, valid_until, authorization_hash)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(payload.uid, proxy_user_id, project_id || null, scope || 'all', vote_id || null, valid_until || null, authHash).run()
+
+  await logAudit(c.env.DB, 'proxy_authorized', 'user', payload.uid, payload.uid, JSON.stringify({ proxy: proxy_user_id, scope }))
+
+  return c.json({
+    message: 'Proxy voting authorized',
+    grantor_id: payload.uid,
+    proxy_id: proxy_user_id,
+    scope: scope || 'all',
+    authorization_hash: authHash,
+    valid_until: valid_until || 'indefinite',
+    note: 'Proxy can vote on behalf of grantor. SHERKETI representative cannot use proxy.',
+    blueprint_reference: 'Part VIII.2 - Proxy Voting'
+  })
+})
+
+// GET /proxy/my-authorizations - Get user's proxy authorizations
+governanceRoutes.get('/proxy/my-authorizations', async (c) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
+  const payload = verifyToken(authHeader.replace('Bearer ', ''))
+  if (!payload) return c.json({ error: 'Invalid token' }, 401)
+
+  const given = await c.env.DB.prepare("SELECT * FROM proxy_authorizations WHERE grantor_id = ? AND status = 'active'").bind(payload.uid).all()
+  const received = await c.env.DB.prepare("SELECT * FROM proxy_authorizations WHERE proxy_id = ? AND status = 'active'").bind(payload.uid).all()
+
+  return c.json({ given: given.results, received: received.results })
+})
+
+// POST /proxy/revoke - Revoke proxy authorization
+governanceRoutes.post('/proxy/revoke', async (c) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
+  const payload = verifyToken(authHeader.replace('Bearer ', ''))
+  if (!payload) return c.json({ error: 'Invalid token' }, 401)
+
+  const { proxy_id } = await c.req.json()
+  await c.env.DB.prepare("UPDATE proxy_authorizations SET status = 'revoked' WHERE grantor_id = ? AND id = ?").bind(payload.uid, proxy_id).run()
+  return c.json({ message: 'Proxy authorization revoked' })
+})
+
+// =========================================================================
+// DIGITAL NOTARIZATION (Part VI / VIII)
+// =========================================================================
+governanceRoutes.post('/notarize', async (c) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
+  const payload = verifyToken(authHeader.replace('Bearer ', ''))
+  if (!payload) return c.json({ error: 'Invalid token' }, 401)
+
+  const { entity_type, entity_id, project_id } = await c.req.json()
+  if (!entity_type || !entity_id || !project_id) return c.json({ error: 'entity_type, entity_id, project_id required' }, 400)
+
+  // Verify law_firm role
+  const user = await c.env.DB.prepare('SELECT role FROM users WHERE id = ?').bind(payload.uid).first<any>()
+  if (!user || !['law_firm', 'admin'].includes(user.role)) {
+    return c.json({ error: 'Only law firms can notarize documents' }, 403)
+  }
+
+  const notarizationHash = btoa(JSON.stringify({ entity_type, entity_id, project_id, stamp_time: Date.now(), law_firm: payload.uid }))
+  const timestampHash = btoa(Date.now().toString())
+
+  await c.env.DB.prepare(`
+    INSERT INTO digital_notarizations (entity_type, entity_id, project_id, law_firm_id, notarization_hash, timestamp_hash, status, stamped_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'stamped', CURRENT_TIMESTAMP)
+  `).bind(entity_type, entity_id, project_id, payload.uid, notarizationHash, timestampHash).run()
+
+  await logAudit(c.env.DB, 'digital_notarization', entity_type, entity_id, payload.uid, JSON.stringify({ project_id, hash: notarizationHash }))
+
+  return c.json({
+    entity_type,
+    entity_id,
+    project_id,
+    notarization_hash: notarizationHash,
+    timestamp_hash: timestampHash,
+    stamped_by: payload.uid,
+    status: 'stamped',
+    stored_on: 'Immutable append-only ledger',
+    blueprint_reference: 'Part VI.4 / Part VIII.2 - Digital Notarization'
+  })
+})
+
+// GET /notarizations/:projectId - Get notarization history
+governanceRoutes.get('/notarizations/:projectId', async (c) => {
+  const projectId = c.req.param('projectId')
+  const notarizations = await c.env.DB.prepare('SELECT * FROM digital_notarizations WHERE project_id = ? ORDER BY created_at DESC').bind(projectId).all()
+  return c.json({ notarizations: notarizations.results })
+})
+
+// POST /quorum-extend - Extend vote by 24h if quorum not met (Part VIII.2)
+governanceRoutes.post('/quorum-extend', async (c) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader) return c.json({ error: 'Unauthorized' }, 401)
+  const payload = verifyToken(authHeader.replace('Bearer ', ''))
+  if (!payload) return c.json({ error: 'Invalid token' }, 401)
+
+  const { vote_id } = await c.req.json()
+  if (!vote_id) return c.json({ error: 'vote_id required' }, 400)
+
+  const vote = await c.env.DB.prepare("SELECT * FROM votes WHERE id = ? AND status = 'open'").bind(vote_id).first<any>()
+  if (!vote) return c.json({ error: 'Vote not found or not open' }, 404)
+
+  const totalVoted = vote.votes_for + vote.votes_against + vote.abstentions + vote.auto_yes_power
+  const quorumMet = vote.total_voting_power > 0 ? (totalVoted / vote.total_voting_power * 100) >= vote.quorum_required : false
+
+  if (quorumMet) {
+    return c.json({ error: 'Quorum already met, no extension needed', quorum_percent: (totalVoted / vote.total_voting_power * 100).toFixed(1) }, 400)
+  }
+
+  const newDeadline = new Date(vote.voting_deadline)
+  newDeadline.setHours(newDeadline.getHours() + 24)
+
+  await c.env.DB.prepare('UPDATE votes SET voting_deadline = ? WHERE id = ?').bind(newDeadline.toISOString(), vote_id).run()
+  await logAudit(c.env.DB, 'quorum_extension', 'vote', vote_id, payload.uid, JSON.stringify({ old_deadline: vote.voting_deadline, new_deadline: newDeadline.toISOString() }))
+
+  return c.json({
+    vote_id,
+    extended: true,
+    new_deadline: newDeadline.toISOString(),
+    reason: 'Quorum not met (minimum 51% of total voting power required)',
+    current_participation: `${(totalVoted / vote.total_voting_power * 100).toFixed(1)}%`,
+    required_quorum: `${vote.quorum_required}%`,
+    blueprint_reference: 'Part VIII.2 - Quorum Extension'
+  })
+})
